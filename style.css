@@ -131,3 +131,4 @@ details summary{cursor:pointer;padding:6px 0}
 .chart .cl{text-anchor:end;paint-order:stroke;stroke:var(--card);stroke-width:3px;stroke-linejoin:round}
 .chart .cl.fin{text-anchor:end;fill:var(--pri)}
 .lmeta span{white-space:nowrap}
+.syncprog{position:fixed;left:50%;top:calc(env(safe-area-inset-top) + 54px);transform:translateX(-50%);z-index:40;background:var(--card);color:var(--ink);border:1px solid var(--line);box-shadow:0 4px 14px rgba(0,0,0,.12);border-radius:99px;padding:6px 14px;font-size:13px;max-width:92vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}

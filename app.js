@@ -16,30 +16,47 @@ const stamp=prev=>{const t=nowISO();if(!prev||t>prev)return t;const d=new Date(p
 const uid=p=>p+Date.now().toString(36)+Math.random().toString(36).slice(2,6);
 const live=a=>(a||[]).filter(x=>x&&!x.deleted);
 
-/* ---------- 儲存（localStorage；太大就自動轉 IndexedDB） ---------- */
-const IDB_FLAG=KEY+'.idb';
-function idb(){return new Promise((ok,no)=>{const r=indexedDB.open('hhledger',1);r.onupgradeneeded=()=>r.result.createObjectStore('kv');r.onsuccess=()=>ok(r.result);r.onerror=()=>no(r.error)})}
-async function idbSet(k,v){const db=await idb();return new Promise((ok,no)=>{const t=db.transaction('kv','readwrite');t.objectStore('kv').put(v,k);t.oncomplete=()=>ok();t.onerror=()=>no(t.error)})}
-async function idbGet(k){const db=await idb();return new Promise((ok,no)=>{const t=db.transaction('kv','readonly');const q=t.objectStore('kv').get(k);q.onsuccess=()=>ok(q.result);q.onerror=()=>no(q.error)})}
-let storageNote='';
+/* ---------- 儲存（細資料用 localStorage；大資料自動轉 IndexedDB） ----------
+   iPhone Safari 嘅 localStorage 上限約 5 MB，而且按 UTF-16 計（1 個字元 = 2 bytes），即係約 260 萬字元；
+   12k 筆交易已經差唔多爆。又要留位俾同步設定同排隊清單，所以資料超過 LS_MAX 字元就一定用 IndexedDB。 */
+const IDB_FLAG=KEY+'.idb', LS_MAX=1500000;
+let idbP=null;
+function idb(){
+  if(!idbP){idbP=new Promise((ok,no)=>{const r=indexedDB.open('hhledger',1);r.onupgradeneeded=()=>r.result.createObjectStore('kv');
+    r.onsuccess=()=>{const db=r.result;db.onclose=()=>{idbP=null};db.onversionchange=()=>{db.close();idbP=null};ok(db)};
+    r.onerror=()=>no(r.error);r.onblocked=()=>no(new Error('IndexedDB blocked'))});idbP.catch(()=>{idbP=null})}
+  return idbP}
+// iOS 間中會「Connection to Indexed Database server lost」（app 喺背景耐咗）：重新連線再試
+async function idbOp(fn){for(let i=0;;i++){try{return await fn(await idb())}catch(e){idbP=null;if(i>=2)throw e;await new Promise(r=>setTimeout(r,200*(i+1)))}}}
+const idbSet=(k,v)=>idbOp(db=>new Promise((ok,no)=>{const t=db.transaction('kv','readwrite');t.objectStore('kv').put(v,k);t.oncomplete=()=>ok();t.onerror=()=>no(t.error);t.onabort=()=>no(t.error||new Error('IndexedDB abort'))}));
+const idbGet=k=>idbOp(db=>new Promise((ok,no)=>{const t=db.transaction('kv','readonly');const q=t.objectStore('kv').get(k);q.onsuccess=()=>ok(q.result);q.onerror=()=>no(q.error)}));
+function lsSet(k,v){try{localStorage.setItem(k,v);return true}catch(e){return false}}
+let storageNote='', storageLocked=false, idbPending=null, idbWriting=null;
 function save(){
+  if(storageLocked)return;   // 讀唔到本機資料庫嗰陣唔寫，費事用空白資料覆蓋咗真資料
   const js=JSON.stringify(S);
-  if(!localStorage.getItem(IDB_FLAG)){
-    try{localStorage.setItem(KEY,js);storageNote='';return}
-    catch(e){/* 超出 localStorage 上限 → IndexedDB */}
-  }
-  idbSet(KEY,js).then(()=>{try{localStorage.removeItem(KEY);localStorage.setItem(IDB_FLAG,'1')}catch(_){}
-    storageNote='資料量大，已改用 IndexedDB 儲存（仍然只喺呢部機）'}).catch(()=>alert('儲存失敗：部機儲存空間唔夠，請先匯出備份'));
+  if(!localStorage.getItem(IDB_FLAG)&&js.length<LS_MAX&&lsSet(KEY,js)){storageNote='';return}
+  idbPending=js;   // 連續 save 只寫最新嗰份，而且一次寫一份（次序唔會亂）
+  if(!idbWriting)idbWriting=(async()=>{
+    try{while(idbPending!=null){const v=idbPending;idbPending=null;await idbSet(KEY,v)}
+      if(!localStorage.getItem(IDB_FLAG)){try{localStorage.removeItem(KEY)}catch(_){}lsSet(IDB_FLAG,'1')}
+      storageNote='資料量大，已改用 IndexedDB 儲存（仍然只喺呢部機）'}
+    catch(e){alert('儲存失敗：部機儲存空間唔夠，或者瀏覽器唔俾用資料庫（例如私密瀏覽）。請先喺設定匯出備份。')}
+    finally{idbWriting=null}})();
 }
 async function readStored(){
-  if(localStorage.getItem(IDB_FLAG)){try{const v=await idbGet(KEY);if(v)return v}catch(e){}}
-  return localStorage.getItem(KEY);
+  const flag=localStorage.getItem(IDB_FLAG), ls=flag?null:localStorage.getItem(KEY);
+  if(ls)return ls;
+  try{const v=await idbGet(KEY);if(v){if(!flag)lsSet(IDB_FLAG,'1');return v}}
+  catch(e){if(flag){storageLocked=true;return null}}   // 有資料但讀唔到 → 鎖住唔寫
+  return null;
 }
 async function load(){
   const raw=await readStored();
   if(raw){try{S=JSON.parse(raw)}catch(e){S=null}}
   if(!S){S=await (await fetch('data/seed.json',{cache:'no-store'})).json();save()}
   normalize();
+  if(storageLocked){render();alert('暫時讀唔到呢部機嘅資料庫（iPhone 偶爾會咁）。為咗唔覆蓋你嘅資料，今次唔會儲存任何改動，亦唔會同步。請完全關閉 Safari／app 再開。');return}
   txMonth=ovMonth=today().slice(0,7); ovYear=today().slice(0,4);
   render();
   const m=location.hash.match(/^#sync=([A-Za-z0-9_-]+)/);
@@ -479,35 +496,89 @@ function editLoan(id){
 
 /* ---------- 雲端同步（Google Sheets，Apps Script web app） ---------- */
 const TABLES={transactions:'Transactions',accounts:'Accounts',installments:'Installments',wishlist:'Wishlist',salary:'Salary',forecast:'Forecast',bonus:'Bonus',archive:'Archive',loans:'Loans'};
+const TBL_LABEL={transactions:'交易',accounts:'帳戶',installments:'分期',wishlist:'Wishlist',salary:'人工',forecast:'預測',bonus:'花紅',archive:'舊檔',loans:'貸款'};
+const fmtInt=x=>Number(x||0).toLocaleString('en-HK');
+const syncErr=(code,extra)=>Object.assign(new Error(code),{code},extra||{});
 const Sync={
+  PAGE_ROWS:1200, CHUNK:1000, CHUNK_BYTES:300000, RETRY_MS:1500,
   cfg(){try{return JSON.parse(localStorage.getItem(SYNC_KEY)||'{}')}catch(_){return {}}},
-  setCfg(p){const c={...this.cfg(),...p};localStorage.setItem(SYNC_KEY,JSON.stringify(c));return c},
+  setCfg(p){const c={...this.cfg(),...p};if(!lsSet(SYNC_KEY,JSON.stringify(c)))console.warn('同步設定存唔落 localStorage');return c},
   on(){const c=this.cfg();return !!(c.url&&c.token)},
   q(){try{return JSON.parse(localStorage.getItem(SYNCQ_KEY)||'[]')}catch(_){return []}},
-  setQ(q){try{localStorage.setItem(SYNCQ_KEY,JSON.stringify(q));return true}catch(e){this.status(false,'排隊清單太大，存唔落本機。請撳「首次上載全部資料」。');return false}},
-  async sendRecs(by){for(const [k,recs] of Object.entries(by)){for(let i=0;i<recs.length;i+=1500) await this.call('POST',{action:'upsert',table:TABLES[k],records:recs.slice(i,i+1500)})}},
-  busy:false,
+  setQ(q){if(lsSet(SYNCQ_KEY,JSON.stringify(q)))return true;this.status(false,'排隊清單太大，存唔落本機。請撳「首次上載全部資料」。');return false},
+  /* 分批：每批最多 CHUNK 筆、約 CHUNK_BYTES（iPhone 流動網絡一次過上載／下載幾 MB 好易斷） */
+  chunks(recs){const out=[];let cur=[],b=0;for(const r of recs){const js=JSON.stringify(r),l=js.length+js.replace(/[\x00-\x7f]/g,'').length*2;   // 約 UTF-8 bytes
+
+    if(cur.length&&(cur.length>=this.CHUNK||b+l>this.CHUNK_BYTES)){out.push(cur);cur=[];b=0}cur.push(r);b+=l}if(cur.length)out.push(cur);return out},
+  async sendRecs(by,onProg){let last=null,done=0;const tot=Object.values(by).reduce((s,a)=>s+a.length,0);
+    for(const [k,recs] of Object.entries(by)){for(const part of this.chunks(recs)){
+      const j=await this.retry(()=>this.call('POST',{action:'upsert',table:TABLES[k],records:part}));last=j.serverTime||last;done+=part.length;if(onProg)onProg(k,done,tot)}}
+    return last},
+  busy:false, syncing:null, _prog:'',
   queue(key,rec){
     if(!this.on()||!TABLES[key]) return;
     const q=this.q().filter(x=>!(x.t===key&&x.r.id===rec.id)); q.push({t:key,r:rec}); if(!this.setQ(q))return;
     clearTimeout(this._tm); this._tm=setTimeout(()=>this.flush(),800);
   },
-  async call(method,body,params){
+  async call(method,body,params,timeout=90000){
     const c=this.cfg(); let url=c.url;
-    const opt={method,redirect:'follow'};
+    const opt={method,redirect:'follow',cache:'no-store'};
     if(method==='GET'){const u=new URL(url);u.searchParams.set('token',c.token);Object.entries(params||{}).forEach(([k,v])=>u.searchParams.set(k,v));url=u.toString()}
     else{opt.headers={'Content-Type':'text/plain;charset=utf-8'};opt.body=JSON.stringify({token:c.token,...body})}
-    let res;
-    try{res=await fetch(url,opt)}catch(e){throw new Error('OFFLINE')}
-    const txt=await res.text(); let j;
-    try{j=JSON.parse(txt)}catch(_){throw new Error(/<html/i.test(txt)?'雲端回咗網頁而唔係資料：檢查同步網址（要用 Deploy 之後嘅 /exec 網址，存取權限要「Anyone」）':'雲端回應格式唔啱')}
-    if(!j.ok) throw new Error(j.error==='unauthorized'?'密碼（token）唔啱，雲端拒絕咗':('雲端錯誤：'+(j.error||'未知')));
+    const ac=typeof AbortController==='function'?new AbortController():null; let tm=null;
+    if(ac){opt.signal=ac.signal;tm=setTimeout(()=>ac.abort(),timeout)}
+    const aborted=()=>!!(ac&&ac.signal.aborted);
+    let res,txt;
+    try{res=await fetch(url,opt)}catch(e){clearTimeout(tm);throw syncErr(aborted()?'TIMEOUT':'OFFLINE',{raw:String(e&&e.message||e)})}
+    // Safari：header 收到、body 下載到一半斷線 → res.text() 會 throw「Load failed」，一定要喺度接住
+    try{txt=await res.text()}catch(e){clearTimeout(tm);throw syncErr(aborted()?'TIMEOUT':'BODY',{raw:String(e&&e.message||e)})}
+    clearTimeout(tm);
+    let j;
+    try{j=JSON.parse(txt)}catch(_){throw syncErr(/<html/i.test(txt)?'HTML':!txt?'EMPTY':res.ok?'TRUNC':'HTTP',{status:res.status})}
+    if(!j||!j.ok) throw syncErr('SERVER',{server:String(j&&j.error||'未知')});
     return j;
   },
-  errMsg(e){return e.message==='OFFLINE'?'連唔到雲端（可能冇網）。改動已經排咗隊，有網會自動再試。':e.message},
-  status(ok,msg){const c=this.setCfg(ok?{lastSync:nowISO(),lastError:''}:{lastError:msg,lastErrorAt:nowISO()});this.badge();const el=$('#syncStatus');if(el)el.innerHTML=this.statusHtml()},
+  ERR:{
+    OFFLINE:'連唔到雲端（可能冇網或者網絡唔穩）。未上載嘅改動會留喺部機排隊，有網會自動再試。',
+    TIMEOUT:'雲端太耐冇回應（網絡太慢或者 Google 忙緊）。轉用 Wi-Fi 再撳「立即同步」試吓。',
+    BODY:'下載到一半斷咗線（網絡唔穩）。轉用 Wi-Fi 或者去訊號好啲嘅地方，再撳「立即同步」。',
+    TRUNC:'收到嘅資料唔完整（傳到一半斷咗）。再撳「立即同步」試吓。',
+    EMPTY:'雲端回咗空白回應。再撳「立即同步」試吓。',
+    HTML:'雲端回咗網頁而唔係資料：檢查同步網址（要用 Deploy 之後嘅 /exec 網址，存取權限要「Anyone」）。',
+    OLDBIG:'舊版雲端程式要一次過下載成個約 3 MB 嘅資料，iPhone 流動網絡好易中途斷線。請更新 Apps Script（Manage deployments → 編輯 → New version），之後會自動改用分頁下載；暫時可以轉用 Wi-Fi 再試。',
+    PAGING:'雲端分頁資料前後唔一致（可能有人同時上載緊）。等一陣再撳「立即同步」。'
+  },
+  errMsg(e){
+    const c=e&&e.code;
+    if(c==='SERVER'){const s=e.server;
+      if(s==='unauthorized')return '密碼（token）唔啱，雲端拒絕咗。去設定再貼一次密碼，或者再撳一次同步連結。';
+      if(/^busy/.test(s))return '雲端忙緊（可能另一部機同步緊），等一陣再撳「立即同步」。';
+      if(/unknown action/.test(s))return '雲端程式版本太舊，唔識呢個動作。請更新 Apps Script（Manage deployments → 編輯 → New version）。';
+      if(/cell too long/.test(s))return '有一格資料太長（超過 5 萬字），Google Sheet 存唔落。';
+      if(/unknown table/.test(s))return '雲端唔認得呢個分頁名。';
+      if(/quota|too many times|timed out|exceeded|Service/i.test(s))return 'Google 雲端暫時超出用量或者逾時，等幾分鐘再試。';
+      return /[\u3400-\u9fff]/.test(s)?'雲端錯誤：'+s:'雲端出錯（'+s+'），等一陣再試。'}
+    if(c==='HTTP')return `雲端暫時有問題（HTTP ${e.status}），等一陣再試。`;
+    if(c&&this.ERR[c])return this.ERR[c];
+    const m=String(e&&e.message||e);
+    if(/load failed|failed to fetch|network ?error|connection was lost|internet connection/i.test(m))return this.ERR.BODY;
+    return /[\u3400-\u9fff]/.test(m)?m:'同步出錯（'+m+'）。再撳「立即同步」試吓；如果仲係咁，先喺設定匯出備份。';
+  },
+  /* 失敗會自動再試（預設最多試 3 次）；token 錯／網址錯就唔使再試 */
+  async retry(fn,tries=3){let err;
+    for(let i=0;i<tries;i++){try{return await fn()}catch(e){err=e;
+      if(e.code==='HTML'||(e.code==='SERVER'&&!/^busy|timed out|Service|quota|exceeded/i.test(e.server)))throw e;
+      if(i<tries-1){const p=this._prog;if(p)this.progress(p+`（網絡唔穩，重試緊 ${i+1}/${tries-1}…）`);this._prog=p;
+        await new Promise(r=>setTimeout(r,this.RETRY_MS*(i+1)))}}}
+    throw err},
+  progress(msg){this._prog=msg||'';const el=$('#syncStatus');if(el&&msg)el.textContent=msg;
+    let b=$('#syncProg');
+    if(msg){if(!b){b=document.createElement('div');b.id='syncProg';b.className='syncprog';b.setAttribute('role','status');document.body.appendChild(b)}b.textContent='☁︎ '+msg}
+    else if(b)b.remove();
+    const bd=$('#syncBadge');if(bd&&msg)bd.textContent='☁︎⇣'},
+  status(ok,msg){const c=this.setCfg(ok?{lastSync:nowISO(),lastError:''}:{lastError:msg,lastErrorAt:nowISO()});this.badge();const el=$('#syncStatus');if(el&&!this._prog)el.innerHTML=this.statusHtml()},
   statusHtml(){const c=this.cfg(),q=this.q().length;
-    return `${c.lastSync?'上次同步：'+new Date(c.lastSync).toLocaleString('zh-HK',{hour12:false}):'未同步過'}${q?` · 排緊隊：${q} 項`:''}${c.lastError?`<br><span style="color:var(--warn)">⚠️ ${esc(c.lastError)}</span>`:''}`},
+    return `${c.lastSync?'上次同步：'+new Date(c.lastSync).toLocaleString('zh-HK',{hour12:false}):'未同步過'}${q?` · 排緊隊：${q} 項`:''}${c.serverVersion?` · 雲端程式 v${c.serverVersion}${c.serverVersion<2?'（舊版：建議更新 Apps Script，分頁下載會穩陣好多）':''}`:''}${c.lastError?`<br><span style="color:var(--warn)">⚠️ ${esc(c.lastError)}</span>`:''}`},
   badge(){const b=$('#syncBadge');if(!b)return;if(!this.on()){b.textContent='';return}
     const c=this.cfg(),q=this.q().length;b.textContent=c.lastError?'☁︎⚠️':q?'☁︎'+q:'☁︎✓';b.title=c.lastError||'雲端同步'},
   async flush(){
@@ -530,35 +601,89 @@ const Sync={
     (loc||[]).forEach(l=>{if(!seen.has(l.id))push.push(l)});
     return {out:[...m.values()],push};
   },
+  mergeInc(loc,rem){ // 增量：只合併雲端有變嘅紀錄
+    if(!rem||!rem.length)return loc||[];
+    const m=new Map((loc||[]).map(r=>[r.id,r]));
+    rem.forEach(r=>{const l=m.get(r.id);if(!l||(r.updatedAt||'')>=(l.updatedAt||''))m.set(r.id,r)});return [...m.values()];
+  },
+  mergeExtras(local,remote){
+    if(Array.isArray(remote.categories)){const set=new Set(remote.categories);local.categories=[...remote.categories,...(local.categories||[]).filter(c=>!set.has(c))]}
+    if(remote.meta&&(remote.meta.updatedAt||'')>(local.metaUpdatedAt||'')){Object.assign(local,remote.meta.values||{});local.metaUpdatedAt=remote.meta.updatedAt}
+  },
   mergeState(local,remote,full){
     const pushes={};
     for(const k of Object.keys(TABLES)){
       if(full){const r=this.mergeTable(local[k],remote[k]);local[k]=r.out;if(r.push.length)pushes[k]=r.push}
-      else{ // 增量：只合併雲端有變嘅紀錄
-        const m=new Map((local[k]||[]).map(r=>[r.id,r]));
-        (remote[k]||[]).forEach(r=>{const l=m.get(r.id);if(!l||(r.updatedAt||'')>=(l.updatedAt||''))m.set(r.id,r)});local[k]=[...m.values()];
-      }
+      else local[k]=this.mergeInc(local[k],remote[k]);
     }
-    if(Array.isArray(remote.categories)){const set=new Set(remote.categories);local.categories=[...remote.categories,...(local.categories||[]).filter(c=>!set.has(c))]}
-    if(remote.meta&&(remote.meta.updatedAt||'')>(local.metaUpdatedAt||'')){Object.assign(local,remote.meta.values||{});local.metaUpdatedAt=remote.meta.updatedAt}
+    this.mergeExtras(local,remote);
     return pushes;
   },
-  async pull(full){
+  // 本機有、雲端冇（或者本機較新）嘅紀錄：直接由記憶體上載（唔塞入排隊清單，費事爆 localStorage）
+  async sendPushes(pushes){
+    const cnt=Object.values(pushes).reduce((s,a)=>s+a.length,0); if(!cnt)return;
+    try{await this.sendRecs(pushes,(k,d,t)=>t>2000&&this.progress(`上載緊本機紀錄 ${fmtInt(d)}／${fmtInt(t)}…`))}catch(e){
+      if(cnt<=500){for(const [k,recs] of Object.entries(pushes)) recs.forEach(r=>this.queue(k,r))}
+      else throw new Error(`有 ${cnt} 筆本機紀錄未上載（${this.errMsg(e)}）。有網時撳「立即同步」或「首次上載全部資料」。`)}
+  },
+  /* 先 ping：新版雲端程式（version ≥ 2）支援分頁 → 逐頁下載；舊版 → 一次過下載 */
+  async serverInfo(){
+    const j=await this.retry(()=>this.call('GET',null,{action:'ping'},30000));
+    const v=Number(j.version)||1; this.setCfg({serverVersion:v}); return {version:v,paging:v>=2&&!!j.paging};
+  },
+  async pull(full){const info=await this.serverInfo();return info.paging?this.pullPaged(full):this.pullOnce(full)},
+  async pullOnce(full){
     const c=this.cfg(); const params={action:'pull'}; if(!full&&c.serverTime)params.since=c.serverTime;
-    const j=await this.call('GET',null,params);
+    this.progress(params.since?'下載緊雲端改動…':'下載緊全部資料（舊版雲端程式要一次過下載，可能要等一陣）…');
+    let j;
+    try{j=await this.call('GET',null,params,180000)}
+    catch(e){if(!params.since&&['BODY','TRUNC','TIMEOUT','EMPTY'].includes(e.code))throw syncErr('OLDBIG',{raw:e.raw||e.code});throw e}
     const pushes=this.mergeState(S,j.state,!params.since);
     normalize(); save(); this.setCfg({serverTime:j.serverTime});
-    // 本機有、雲端冇（或者本機較新）嘅紀錄：直接由記憶體上載（唔塞入排隊清單，費事爆 localStorage）
-    const cnt=Object.values(pushes).reduce((s,a)=>s+a.length,0);
-    if(cnt){try{await this.sendRecs(pushes)}catch(e){
-      if(cnt<=500){for(const [k,recs] of Object.entries(pushes)) recs.forEach(r=>this.queue(k,r))}
-      else throw new Error(`有 ${cnt} 筆本機紀錄未上載（${this.errMsg(e)}）。有網時撳「立即同步」或「首次上載全部資料」。`)}}
+    await this.sendPushes(pushes);
     return j;
+  },
+  /* 逐個表、逐頁下載；每個表下載完即刻交俾 onTable 合併 */
+  async fetchPaged(since,onTable){
+    this.progress(since?'檢查緊雲端有咩改動…':'準備下載…');
+    const info=await this.retry(()=>this.call('GET',null,since?{action:'tables',since}:{action:'tables'},60000));
+    const list=(info.tables||[]).filter(t=>TABLES[t.key]);
+    const grand=list.reduce((s,t)=>s+(t.rows||0),0); let got=0;
+    for(const t of list){
+      const rows=[];
+      if(t.rows>0){let off=0;
+        while(off!=null){
+          this.progress(`下載緊 ${TBL_LABEL[t.key]||t.key} ${fmtInt(Math.min(off,t.rows))}／${fmtInt(t.rows)}…`+(grand>3000?`（${Math.floor(got/grand*100)}%）`:''));
+          const q={action:'pull',table:t.name,offset:off,limit:this.PAGE_ROWS}; if(since)q.since=since;
+          const p=await this.retry(()=>this.call('GET',null,q,60000));
+          for(const r of p.rows)rows.push(r); got+=p.rows.length;
+          if(p.next!=null&&!(p.next>off))throw syncErr('PAGING');
+          off=p.next;
+        }}
+      await onTable(t.key,rows);
+    }
+    for(const k of Object.keys(TABLES))if(!list.some(t=>t.key===k))await onTable(k,[]);   // 雲端未有嘅表當空表
+    return info;
+  },
+  async pullPaged(full){
+    const c=this.cfg(); const since=(!full&&c.serverTime)?c.serverTime:''; const pushes={};
+    const info=await this.fetchPaged(since,async(k,rows)=>{
+      if(since)S[k]=this.mergeInc(S[k],rows);
+      else{const r=this.mergeTable(S[k],rows);S[k]=r.out;if(r.push.length)pushes[k]=r.push}});
+    this.mergeExtras(S,info);
+    normalize(); save(); this.setCfg({serverTime:info.serverTime});
+    this.progress('');
+    await this.sendPushes(pushes);
+    return info;
   },
   async syncNow(full){
     if(!this.on()){alert('未設定同步網址同密碼');return}
-    try{const a=await this.flush();await this.pull(full);const b=await this.flush();if(a&&b)this.status(true);rerender(1)}
-    catch(e){this.status(false,this.errMsg(e))}
+    if(this.syncing)return this.syncing;
+    this.syncing=(async()=>{
+      try{await this.flush();await this.pull(full);const b=await this.flush();if(b)this.status(true);rerender(1)}
+      catch(e){this.status(false,this.errMsg(e))}
+      finally{this.progress('');this.syncing=null;const el=$('#syncStatus');if(el)el.innerHTML=this.statusHtml();this.badge()}})();
+    return this.syncing;
   },
   async auto(){
     if(!this.on()) return;
@@ -567,21 +692,33 @@ const Sync={
     setInterval(()=>this.flush(),60000);
   },
   metaOf(st){const v={};['version','burden','source','generatedAt','historyImport'].forEach(k=>{if(st[k]!==undefined)v[k]=st[k]});return {values:v,updatedAt:st.metaUpdatedAt||nowISO()}},
+  /* 首次上載：先清空雲端（push 空表 + 分類 + meta），再分批 upsert，每批 < 300 KB */
   async pushAll(){
     if(!this.on()){alert('未設定同步網址同密碼');return}
     if(!confirm('會用呢部機嘅全部資料取代雲端 Google Sheet 入面嘅資料。確定？'))return;
-    try{const st={};Object.keys(TABLES).forEach(k=>st[k]=S[k]);st.categories=S.categories;st.meta=this.metaOf(S);
-      const j=await this.call('POST',{action:'push',state:st});this.setQ([]);this.setCfg({serverTime:j.serverTime});this.status(true);alert('上載完成：'+(j.counts?Object.entries(j.counts).map(([k,v])=>k+' '+v).join('、'):''))}
-    catch(e){this.status(false,this.errMsg(e));alert('上載失敗：'+this.errMsg(e))}
+    let started=false;
+    try{const st={},by={};Object.keys(TABLES).forEach(k=>{st[k]=[];if((S[k]||[]).length)by[k]=S[k]});
+      st.categories=S.categories;st.meta=this.metaOf(S);
+      this.progress('上載緊（清空雲端舊資料）…');
+      const j=await this.retry(()=>this.call('POST',{action:'push',state:st},null,120000),2); started=true;
+      const last=await this.sendRecs(by,(k,d,t)=>this.progress(`上載緊 ${fmtInt(d)}／${fmtInt(t)} 筆…`));
+      this.setQ([]);this.setCfg({serverTime:last||j.serverTime});this.progress('');this.status(true);
+      alert('上載完成：'+Object.keys(TABLES).filter(k=>(S[k]||[]).length).map(k=>(TBL_LABEL[k]||k)+' '+fmtInt(S[k].length)).join('、'))}
+    catch(e){this.progress('');const m=this.errMsg(e);this.status(false,m);alert('上載失敗：'+m+(started?'\n雲端資料可能唔齊，請再撳一次「首次上載全部資料」。':''))}
   },
   async pullReplace(){
     if(!this.on()){alert('未設定同步網址同密碼');return}
     if(!confirm('會用雲端資料覆蓋呢部機（未上載嘅改動會冇咗，建議先匯出備份）。確定？'))return;
-    try{const j=await this.call('GET',null,{action:'pull'});const st=j.state;const ns={...S};
+    try{const info=await this.serverInfo();let st,serverTime;
+      if(info.paging){const got={};const t=await this.fetchPaged('',async(k,rows)=>{got[k]=rows});st={...got,categories:t.categories,meta:t.meta};serverTime=t.serverTime}
+      else{this.progress('下載緊全部資料（舊版雲端程式要一次過下載，可能要等一陣）…');
+        let j;try{j=await this.call('GET',null,{action:'pull'},180000)}catch(e){if(['BODY','TRUNC','TIMEOUT','EMPTY'].includes(e.code))throw syncErr('OLDBIG');throw e}
+        st=j.state;serverTime=j.serverTime}
+      const ns={...S};
       Object.keys(TABLES).forEach(k=>ns[k]=st[k]||[]);if(Array.isArray(st.categories))ns.categories=st.categories;
       if(st.meta){Object.assign(ns,st.meta.values||{});ns.metaUpdatedAt=st.meta.updatedAt}
-      S=ns;normalize();save();this.setQ([]);this.setCfg({serverTime:j.serverTime});this.status(true);$('#dlg').close();rerender();alert('已由雲端下載')}
-    catch(e){this.status(false,this.errMsg(e));alert('下載失敗：'+this.errMsg(e))}
+      S=ns;normalize();save();this.setQ([]);this.setCfg({serverTime});this.progress('');this.status(true);$('#dlg').close();rerender();alert('已由雲端下載')}
+    catch(e){this.progress('');this.status(false,this.errMsg(e));alert('下載失敗：'+this.errMsg(e))}
   }
 };
 
@@ -609,7 +746,9 @@ function settings(){
     const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download=`家計簿備份_${today()}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),2000)};
   $('#impBtn').onclick=()=>$('#importFile').click();
   $('#rstBtn').onclick=async()=>{if(confirm('確定重設？本機改動會消失（建議先匯出）')){localStorage.removeItem(KEY);localStorage.removeItem(IDB_FLAG);S=null;dlg.close();await load()}};
-  const saveCfg=()=>{const url=$('#syUrl').value.trim(),token=$('#syTok').value.trim();Sync.setCfg({url,token,serverTime:''});return !!(url&&token)};
+  const saveCfg=()=>{const url=$('#syUrl').value.trim(),token=$('#syTok').value.trim(),c=Sync.cfg();
+    // 網址／密碼有改先重新全量同步；唔係每次撳「立即同步」都下載晒成個資料庫
+    Sync.setCfg(url!==c.url||token!==c.token?{url,token,serverTime:'',serverVersion:0}:{url,token});return !!(url&&token)};
   $('#sySave').onclick=()=>{saveCfg();$('#syncStatus').innerHTML=Sync.on()?'已儲存。撳「立即同步」試吓。':'已清除同步設定（純本機模式）';Sync.badge()};
   $('#syNow').onclick=async()=>{saveCfg();$('#syncStatus').textContent='同步緊…';await Sync.syncNow(false);$('#syncStatus').innerHTML=Sync.statusHtml()};
   $('#syPush').onclick=async()=>{saveCfg();$('#syncStatus').textContent='上載緊…';await Sync.pushAll();$('#syncStatus').innerHTML=Sync.statusHtml()};
