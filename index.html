@@ -16,6 +16,7 @@
 <body>
 <header class="top">
   <h1 id="title">總覽</h1>
+  <span id="syncBadge" class="sub" aria-live="polite"></span>
   <button id="menuBtn" class="ghost" aria-label="設定">⚙︎</button>
 </header>
 <main id="view"></main>
@@ -25,6 +26,7 @@
   <button data-tab="accounts"><span>🏦</span>帳戶</button>
   <button data-tab="inst"><span>🗓️</span>分期</button>
   <button data-tab="wish"><span>🎁</span>Wishlist</button>
+  <button data-tab="pay"><span>💼</span>人工</button>
 </nav>
 <dialog id="dlg"><form method="dialog" id="dlgForm"></form></dialog>
 <input type="file" id="importFile" accept="application/json,.json" hidden>

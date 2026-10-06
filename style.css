@@ -39,3 +39,14 @@ input,select,textarea{font:inherit;font-size:16px;padding:9px 10px;border:1px so
 .bar{height:8px;background:var(--line);border-radius:99px;overflow:hidden;margin-top:6px}.bar i{display:block;height:100%;background:var(--pri)}
 .month{display:flex;align-items:center;gap:8px;margin-bottom:10px}.month input{width:auto}
 small.note{display:block;color:var(--mute);font-size:12px;margin-top:2px}
+.tbl{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:4px 0}
+.tbl table{border-collapse:collapse;font-size:13px;min-width:100%}
+.tbl th,.tbl td{padding:5px 6px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top;white-space:nowrap}
+.tbl td small{color:var(--mute)}
+.tbl th{color:var(--mute);font-weight:600;position:sticky;top:0;background:var(--card)}
+.tbl td.num{text-align:right;font-variant-numeric:tabular-nums}
+.month input[type=search]{width:100%}
+.top{gap:8px}.top h1{flex:1}
+#syncBadge{font-size:13px}
+details summary{cursor:pointer;padding:6px 0}
+.card h2 select{width:auto;font-size:14px;padding:2px 6px;margin-left:6px}
