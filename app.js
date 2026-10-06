@@ -11,6 +11,8 @@ const fmt0=x=>fmt(x,0);
 const pct=x=>x==null||x===''||isNaN(x)?'—':(x*100).toFixed(1)+'%';
 const today=()=>{const d=new Date();return new Date(d.getTime()-d.getTimezoneOffset()*6e4).toISOString().slice(0,10)};
 const nowISO=()=>new Date().toISOString();
+/* 新 updatedAt 一定要大過舊嗰個（就算舊資料嘅時間喺將來／機時間唔準），否則 last-write-wins 會食咗你啱啱嘅改動 */
+const stamp=prev=>{const t=nowISO();if(!prev||t>prev)return t;const d=new Date(prev);return isNaN(d)?t:new Date(d.getTime()+1).toISOString()};
 const uid=p=>p+Date.now().toString(36)+Math.random().toString(36).slice(2,6);
 const live=a=>(a||[]).filter(x=>x&&!x.deleted);
 
@@ -48,7 +50,7 @@ async function load(){
   Sync.auto();
 }
 function normalize(){
-  ['accounts','transactions','installments','wishlist','categories','salary','forecast','bonus','archive'].forEach(k=>{if(!Array.isArray(S[k]))S[k]=[]});
+  ['accounts','transactions','installments','wishlist','categories','salary','forecast','bonus','archive','loans'].forEach(k=>{if(!Array.isArray(S[k]))S[k]=[]});
   if(!S.burden)S.burden={};
 }
 
@@ -57,7 +59,10 @@ const cards=()=>live(S.accounts).filter(a=>a.stmtBal!=null);
 const exposure=a=>a.totalAcct!=null?a.totalAcct:n(a.stmtBal)+n(a.unposted);
 const afterPay=a=>exposure(a)-n(a.paidAfterStmt);
 const burdenList=()=>live(S.installments).filter(i=>i.countInBurden&&!/已完/.test(i.status||''));
-const burden=()=>burdenList().reduce((s,i)=>s+n(i.monthly),0);
+/* 每月分期負擔：有貸款 tab 資料就以貸款為準（唔會同分期 tab 重複計） */
+const burden=()=>loanMode()?activeLoans().reduce((s,l)=>s+n(l.monthly),0):burdenList().reduce((s,i)=>s+n(i.monthly),0);
+const burdenParts=()=>{if(!loanMode())return burdenList().map(i=>[String(i.card||'').split(/[ （]/)[0],n(i.monthly)]);
+  const g={};activeLoans().forEach(l=>{const k=String(l.card||l.lender||'其他').split(/[ （]/)[0];g[k]=(g[k]||0)+n(l.monthly)});return Object.entries(g).sort((a,b)=>b[1]-a[1])};
 const receivable=()=>live(S.wishlist).filter(w=>!w.receivedBack).reduce((s,w)=>s+n(w.receivable),0);
 const depositsHeld=()=>live(S.wishlist).filter(w=>w.status==='已付訂金').reduce((s,w)=>s+n(w.deposit),0);
 const isSpend=t=>t.type==='支出'||t.type==='分期還款';
@@ -68,12 +73,13 @@ const monthTx=m=>live(S.transactions).filter(t=>(t.date||'').startsWith(m));
 const sheetOf=t=>(t.src||'').replace(/^xlsx:/,'').split('!')[0];
 
 /* ---------- 畫面 ---------- */
-const TITLES={overview:'總覽',tx:'記帳',accounts:'帳戶',inst:'分期',wish:'Wishlist',pay:'人工／預測'};
+const TITLES={overview:'總覽',tx:'記帳',accounts:'帳戶',inst:'分期',loan:'貸款',wish:'Wishlist',pay:'人工／預測'};
 function render(){
   $('#title').textContent=TITLES[tab];
   document.querySelectorAll('.tabs button').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));
-  $('#view').innerHTML=({overview:vOverview,tx:vTx,accounts:vAccounts,inst:vInst,wish:vWish,pay:vPay})[tab]();
+  $('#view').innerHTML=({overview:vOverview,tx:vTx,accounts:vAccounts,inst:vInst,loan:vLoan,wish:vWish,pay:vPay})[tab]();
   Sync.badge();
+  if(tab==='loan')loanAnimate();
 }
 function rerender(keepScroll){const y=window.scrollY;render();window.scrollTo(0,keepScroll?y:0)}
 
@@ -90,7 +96,7 @@ function vOverview(){
   <div class="month"><span class="sub">月份</span><input type="month" value="${ovMonth}" onchange="ovMonth=this.value;render()"></div>
   <div class="grid2">
     <div class="card"><h2>本月支出</h2><div class="big">${fmt0(spend)}</div><div class="sub">${mt.length} 筆 · 收入 ${fmt0(inc)}</div></div>
-    <div class="card"><h2>每月分期負擔</h2><div class="big">${fmt0(burden())}</div><div class="sub">${burdenList().map(i=>esc(String(i.card||'').split(/[ （]/)[0])+' '+fmt0(i.monthly)).join(' · ')}</div></div>
+    <div class="card"${loanMode()?` onclick="tab='loan';render()"`:''}><h2>每月分期負擔</h2><div class="big">${fmt0(burden())}</div><div class="sub">${burdenParts().map(([k,v])=>esc(k)+' '+fmt0(v)).join(' · ')}${loanMode()&&loanStats().last?`<br>🏁 還清日 ${ym(loanStats().last)} →`:''}</div></div>
   </div>
   <div class="card"><h2>Citi + HSBC 卡數總額（月結單日，含未入帳分期）</h2>
     <div class="big neg">${fmt0(exp)}</div>
@@ -157,7 +163,8 @@ function vAccounts(){
 
 function instCard(i){
   const pc=i.total?Math.min(100,n(i.paid)/i.total*100):0, rem=i.total?i.total-n(i.paid):null;
-  return `<div class="row" onclick="editInst('${esc(i.id)}')"><div class="l">${esc(i.name)} ${i.countInBurden?'<span class="pill ok">計入月供</span>':''}
+  const lk=live(S.loans).some(l=>(l.instIds||[]).includes(i.id));
+  return `<div class="row" onclick="editInst('${esc(i.id)}')"><div class="l">${esc(i.name)} ${lk?'<span class="pill">🔗 貸款 tab</span>':''}${i.countInBurden?(loanMode()?'<span class="pill amber">月結單合計（參考）</span>':'<span class="pill ok">計入月供</span>'):''}
     <small class="note">${esc(i.card)} · ${esc(i.product)}${i.total?` · ${n(i.paid)}/${i.total} 期（剩 ${rem}）`:''}${i.end?' · 完 '+String(i.end).slice(0,7):''} · ${esc(i.status)}</small>
     ${i.total?`<div class="bar"><i style="width:${pc}%"></i></div>`:''}</div>
     <div class="r">${i.monthly!=null?fmt(i.monthly)+'/月':''}${i.outstanding!=null?`<small class="note">未入帳 ${fmt0(i.outstanding)}</small>`:i.principal!=null?`<small class="note">本金 ${fmt0(i.principal)}</small>`:''}
@@ -166,8 +173,8 @@ function instCard(i){
 function vInst(){
   const L=live(S.installments);
   const v=L.filter(i=>(i.verified||i.countInBurden)&&!i.hist), o=L.filter(i=>!(i.verified||i.countInBurden)&&!i.hist), h=L.filter(i=>i.hist);
-  return `<div class="card"><h2>每月分期負擔合計</h2><div class="big">${fmt(burden())}</div>
-    <div class="sub">${Object.entries(S.burden||{}).map(([k,v])=>esc(k.toUpperCase())+' '+fmt0(v)).join(' + ')}（月結單核對數）。下面舊檔明細唔重複計。</div></div>
+  return `<div class="card"><h2>每月分期負擔合計${loanMode()?'（以 💸 貸款 tab 為準）':''}</h2><div class="big">${fmt(burden())}</div>
+    <div class="sub">${loanMode()?`${burdenParts().map(([k,v])=>esc(k)+' '+fmt0(v)).join(' + ')}。現行貸款逐條（利率、期數、還清日）睇 <a href="#loan" onclick="tab='loan';render();return false">💸 貸款</a>；呢頁嘅月結單合計同舊檔明細只作參考，唔會重複計。月結單核對數：`:''}${Object.entries(S.burden||{}).map(([k,v])=>esc(k.toUpperCase())+' '+fmt0(v)).join(' + ')}${loanMode()?'':'（月結單核對數）。下面舊檔明細唔重複計。'}</div></div>
   <div class="card"><h2>已核對（2026-09 月結單）／計入月供</h2>${v.map(instCard).join('')}</div>
   <div class="card"><h2>舊檔明細（推算，要對月結單）</h2>${o.map(instCard).join('')}</div>
   ${h.length?`<div class="card"><h2>已完成（舊檔分期表）</h2>${h.map(instCard).join('')}</div>`:''}
@@ -244,7 +251,7 @@ function form(title,fields,obj,onSave,onDel){
     fields.forEach(d=>{let v=fd.get(d.k);
       if(d.t==='check') v=!!v; else if(d.t==='number') v=(v===''||v==null)?null:Number(v);
       obj[d.k]=v});
-    obj.updatedAt=nowISO();
+    obj.updatedAt=stamp(obj.updatedAt);
     onSave(obj);save();rerender(1);
   };
   dlg.returnValue='';dlg.showModal();
@@ -252,7 +259,7 @@ function form(title,fields,obj,onSave,onDel){
 /* 新增／修改／刪除（刪除＝墓碑 deleted:true，方便同步合併） */
 function upsertLocal(key,o,isNew){if(isNew)S[key].push(o);Sync.queue(key,o)}
 function tombstone(key,id){const o=S[key].find(x=>x.id===id);if(!o)return;
-  const t={id:o.id,deleted:true,updatedAt:nowISO()};S[key][S[key].indexOf(o)]=t;Sync.queue(key,t)}
+  const t={id:o.id,deleted:true,updatedAt:stamp(o.updatedAt)};S[key][S[key].indexOf(o)]=t;Sync.queue(key,t)}
 const acctNames=()=>[...live(S.accounts).map(a=>a.name),'TBD（付款帳戶待確認）'];
 function editTx(id){
   const t=id?S.transactions.find(x=>x.id===id):{id:uid('t'),date:today(),type:'支出',category:'餐飲',account:'Citibank VISA',amount:null};
@@ -281,7 +288,7 @@ function editInst(id){
     {k:'status',l:'狀態',opts:['進行中','進行中（推算）','可能已完（待確認）','已完']},{k:'countInBurden',l:'計入每月分期負擔',t:'check'},{k:'notes',l:'備註',t:'area'}],
     i,o=>upsertLocal('installments',o,!id),id?()=>tombstone('installments',id):null);
 }
-function bump(id){const i=S.installments.find(x=>x.id===id);i.paid=n(i.paid)+1;if(i.total&&i.paid>=i.total)i.status='已完';i.updatedAt=nowISO();Sync.queue('installments',i);save();rerender(1)}
+function bump(id){const i=S.installments.find(x=>x.id===id);i.paid=n(i.paid)+1;if(i.total&&i.paid>=i.total)i.status='已完';i.updatedAt=stamp(i.updatedAt);Sync.queue('installments',i);save();rerender(1)}
 function editWish(id){
   const w=id?S.wishlist.find(x=>x.id===id):{id:uid('w'),item:'',status:'想買',deposit:0,finalPaid:0,receivable:0,date:today()};
   form(id?'修改項目':'新增 Wishlist',[{k:'item',l:'項目',req:1},{k:'status',l:'狀態',opts:WISH_ST},{k:'maker',l:'廠商'},
@@ -295,7 +302,7 @@ const SAL_F=[{k:'date',l:'生效日',t:'date',req:1},{k:'company',l:'公司'},{k
   {k:'bonus',l:'花紅',t:'number'},{k:'bonusMonths',l:'花紅月數',t:'number'},{k:'notes',l:'備註',t:'area'}];
 function recalcRaises(key){const L=live(S[key==='forecast'?'forecast':'salary']);const all=[...live(S.salary),...live(S.forecast)].sort((a,b)=>a.date.localeCompare(b.date));
   all.forEach((r,i)=>{const p=all[i-1];if(!p)return;const rn=p.net?Math.round((r.net-p.net)/p.net*1e4)/1e4:null,rg=p.monthly?Math.round((r.monthly-p.monthly)/p.monthly*1e4)/1e4:null;
-    if(r.raiseNet!==rn||r.raiseGross!==rg){r.raiseNet=rn;r.raiseGross=rg;r.updatedAt=nowISO();Sync.queue(S.salary.includes(r)?'salary':'forecast',r)}})}
+    if(r.raiseNet!==rn||r.raiseGross!==rg){r.raiseNet=rn;r.raiseGross=rg;r.updatedAt=stamp(r.updatedAt);Sync.queue(S.salary.includes(r)?'salary':'forecast',r)}})}
 function editSalGeneric(key,id){
   const r=id?S[key].find(x=>x.id===id):{id:uid(key==='salary'?'sal':'fc'),date:today()};
   form(id?(key==='salary'?'修改人工紀錄':'修改預測'):(key==='salary'?'新增人工紀錄':'新增預測'),SAL_F,r,o=>{
@@ -304,8 +311,174 @@ function editSalGeneric(key,id){
 }
 const editSal=id=>editSalGeneric('salary',id), editFc=id=>editSalGeneric('forecast',id);
 
+/* ---------- 貸款 ---------- */
+let loanSort='end', loanGroup=true, lastLoanPct=0;
+const LOAN_TYPES=['私人貸款','卡分期','其他'], LOAN_ST=['進行中','已還清','待確認'], RATE_TYPES=['實際年利率 APR','月平息','手續費',''];
+const LOAN_ICON={'私人貸款':'🏦','卡分期':'💳','其他':'🤝'};
+const RM=()=>window.matchMedia&&matchMedia('(prefers-reduced-motion: reduce)').matches;
+const isRev=l=>!!l.revolving;
+const lRem=l=>l.totalPeriods?Math.max(0,n(l.totalPeriods)-n(l.paidPeriods)):null;
+const lPct=l=>l.totalPeriods?Math.min(1,n(l.paidPeriods)/l.totalPeriods):0;
+const lDone=l=>!isRev(l)&&!!l.totalPeriods&&lRem(l)===0;
+const fixedLoans=()=>live(S.loans).filter(l=>!isRev(l)&&l.status!=='待確認'&&l.totalPeriods);
+const activeLoans=()=>fixedLoans().filter(l=>lRem(l)>0);
+const loanMode=()=>fixedLoans().length>0;
+function addMonths(iso,k){const [y,m,d]=String(iso).split('-').map(Number);const t=new Date(Date.UTC(y,m-1+k,1));
+  const dim=new Date(Date.UTC(t.getUTCFullYear(),t.getUTCMonth()+1,0)).getUTCDate();return t.toISOString().slice(0,8)+String(Math.min(d||1,dim)).padStart(2,'0')}
+const mdiff=(a,b)=>(+b.slice(0,4)-+a.slice(0,4))*12+(+b.slice(5,7)-+a.slice(5,7));
+const lEnd=l=>l.endDate||(lRem(l)!=null?addMonths(today(),Math.max(0,lRem(l)-1)):null);
+function loanDerive(l){if(isRev(l))return l;const r=lRem(l);
+  if(r!=null){l.remainingPeriods=r;if(l.monthly!=null)l.remainingAmount=Math.round(n(l.monthly)*r*100)/100}
+  if(l.startDate&&l.totalPeriods)l.endDate=addMonths(l.startDate,n(l.totalPeriods)-1);
+  if(r===0&&l.status==='進行中')l.status='已還清';else if(r>0&&l.status==='已還清')l.status='進行中';return l}
+/* 用嚟上色／排序嘅年利率（月平息冇 APR 就用經驗公式粗估） */
+const lApr=l=>{if(l.rate==null||l.rate==='')return null;if(/月平息/.test(l.rateType||'')){if(l.aprEst!=null&&l.aprEst!=='')return n(l.aprEst);const N=n(l.totalPeriods)||12;return n(l.rate)*12*2*N/(N+1)}return n(l.rate)};
+function rateBadge(l){const a=lApr(l);
+  if(a==null)return `<span class="rb unk">利率 未知（補返）</span>`;
+  const c=a<6?'lo':a<15?'mid':'hi', face=a<6?'😌':a<15?'😐':'🔥';
+  const t=/月平息/.test(l.rateType||'')?`月平息 ${n(l.rate)}%${l.aprEst!=null?` ≈ APR ${l.aprEst}%`:''}`:`${/APR/.test(l.rateType||'')?'APR ':''}${n(l.rate)}%${/手續費/.test(l.rateType||'')?' 手續費':''}`;
+  return `<span class="rb ${c}" title="${esc(l.rateNote||'')}">${face} ${t}${l.rateEst?' <b>估算</b>':''}</span>`}
+const unk='<span class="unk">未知（補返）</span>';
+function heroQuip(p){return p>=1?'🎉 無債一身輕！今晚飲返杯（汽水）慶祝下':p>=.9?'差少少！準備好開香檳 🍾':p>=.75?'見到山頂支旗喇，打大佬前最後幾關 🎮':p>=.5?'過咗半山！落斜（還款）會越嚟越快 🏃':p>=.25?'爬緊山腰，唔好望落去，望住支旗 🚩':p>=.1?'熱身完畢！每撳一下「+1 期」都係向山頂行一步 🥾':'萬事起頭難，肯開始已經贏咗一半 💪'}
+function loanQuip(l){const r=lRem(l),p=lPct(l);if(r===0)return '畢業咗！🎓 再見唔送';if(r===1)return '最後一期！打完呢隻大佬就通關 👾';
+  if(r<=3)return `仲有 ${r} 期，打大佬前最後幾關！`;if(r<=6)return '半年內畢業，頂住 💪';if(r<=12)return '一年內搞掂，見到隧道尾嘅光 🔦';
+  if(p>=.5)return '過咗半場，下半場追分 ⚽';if(p>=.25)return '慢慢嚟，比較快 🐢';return '長跑模式啟動 🏃‍♂️ 記得補充水分'}
+const runnerOf=p=>p>=1?'🎓':p>=.85?'🏇':p>=.5?'🏃':p>=.25?'🚶':'🐌';
+const PLUS_MSG=['+1！又近咗一步 🎯','債務 HP −1 👾 繼續打！','Nice！供完一期，獎勵自己飲杯水 💧（唔好買嘢住 😂）','穩陣！將來嘅你多謝你 🙏','又一格！儲齊就換到自由 🆓'];
+const ym=s=>s?String(s).slice(0,7):'—';
+function durTxt(m){if(m<=0)return '今個月';const y=Math.floor(m/12),r=m%12;return `${m} 個月${y?`（${y} 年${r?` ${r} 個月`:''}）`:''}`}
+/* 照供款日計，應該入咗幾多期但未撳 +1 */
+function dueSince(l){if(!l.payDay||!l.paidAsOf||!(lRem(l)>0))return 0;const pd=n(l.payDay);let d=addMonths(l.paidAsOf.slice(0,7)+'-'+String(pd).padStart(2,'0'),0),k=0;
+  if(d<=l.paidAsOf)d=addMonths(d,1);while(d<=today()&&k<lRem(l)){k++;d=addMonths(d,1)}return k}
+function loanStats(){const F=fixedLoans(),A=activeLoans();
+  const tot=F.reduce((s,l)=>s+n(l.monthly)*n(l.totalPeriods),0),paid=F.reduce((s,l)=>s+n(l.monthly)*Math.min(n(l.paidPeriods),n(l.totalPeriods)),0);
+  const ends=A.map(lEnd).filter(Boolean).sort(),last=ends[ends.length-1]||null,first=ends[0]||null;
+  const rated=A.filter(l=>lApr(l)!=null),w=rated.reduce((s,l)=>s+n(l.remainingAmount||n(l.monthly)*lRem(l)),0);
+  return {F,A,pct:tot?paid/tot:(F.length?1:0),monthly:A.reduce((s,l)=>s+n(l.monthly),0),remain:A.reduce((s,l)=>s+n(l.monthly)*lRem(l),0),last,first,
+    nextGrp:first?A.filter(l=>ym(lEnd(l))===ym(first)):[],done:F.filter(lDone).length,
+    avgApr:w?rated.reduce((s,l)=>s+lApr(l)*n(l.remainingAmount||n(l.monthly)*lRem(l)),0)/w:null}}
+/* 每月供款階梯（由下個月起） */
+function loanSchedule(A){const start=addMonths(today().slice(0,7)+'-01',1).slice(0,7);let last=start;
+  const sp=A.map(l=>{const e=ym(lEnd(l));const s=addMonths(e+'-01',-(lRem(l)-1)).slice(0,7);if(e>last)last=e;return {s,e,m:n(l.monthly),l}});
+  const out=[];for(let m=start;m<=last;m=addMonths(m+'-01',1).slice(0,7))out.push({m,total:sp.filter(x=>x.s<=m&&m<=x.e).reduce((a,x)=>a+x.m,0)});
+  const drops=[];for(let i=1;i<out.length;i++)if(out[i].total<out[i-1].total-0.005)drops.push({m:out[i].m,saved:out[i-1].total-out[i].total,now:out[i].total,names:sp.filter(x=>x.e===out[i-1].m).map(x=>x.l.name)});
+  if(out.length)drops.push({m:addMonths(last+'-01',1).slice(0,7),saved:out[out.length-1].total,now:0,names:sp.filter(x=>x.e===last).map(x=>x.l.name),fin:1});
+  return {pts:out,drops}}
+const TRAIL=[[14,118],[48,98],[70,86],[95,93],[122,73],[150,57],[175,45],[198,55],[222,37],[247,22]];
+function trailPt(p){const seg=[];let tot=0;for(let i=1;i<TRAIL.length;i++){const d=Math.hypot(TRAIL[i][0]-TRAIL[i-1][0],TRAIL[i][1]-TRAIL[i-1][1]);seg.push(d);tot+=d}
+  let want=Math.max(0,Math.min(1,p))*tot;for(let i=0;i<seg.length;i++){if(want<=seg[i]){const f=seg[i]?want/seg[i]:0;return [TRAIL[i][0]+(TRAIL[i+1][0]-TRAIL[i][0])*f,TRAIL[i][1]+(TRAIL[i+1][1]-TRAIL[i][1])*f]}want-=seg[i]}return TRAIL[TRAIL.length-1]}
+function chartSvg(sch){const P=sch.pts;if(!P.length)return '';const W=340,H=150,pl=6,pr=6,pt=18,pb=20,mx=Math.max(...P.map(p=>p.total),1);
+  const xw=(W-pl-pr)/(P.length+1),X=i=>pl+i*xw,Y=v=>pt+(H-pt-pb)*(1-v/mx);
+  let d=`M${X(0).toFixed(1)},${Y(P[0].total).toFixed(1)}`,len=0,px=X(0),py=Y(P[0].total);
+  P.forEach((p,i)=>{const y=Y(p.total),x1=X(i+1);if(i>0){d+=`V${y.toFixed(1)}`;len+=Math.abs(y-py)}d+=`H${x1.toFixed(1)}`;len+=x1-px;px=x1;py=y});
+  d+=`V${Y(0).toFixed(1)}`;len+=Math.abs(Y(0)-py);
+  const area=d+`H${X(0).toFixed(1)}Z`;
+  const top=sch.drops.filter(x=>!x.fin).slice().sort((a,b)=>b.saved-a.saved).slice(0,3).map(x=>x.m);
+  const labs=[];
+  const marks=sch.drops.map(dp=>{const i=P.findIndex(p=>p.m===dp.m);const ix=i<0?P.length:i;const x=X(ix),y=Y(dp.now);
+    if(top.includes(dp.m)||dp.fin)labs.push({x,y,yp:Y(dp.now+n(dp.saved)),t:dp.fin?'🏁 清晒':'−'+fmt0(dp.saved),fin:dp.fin});
+    return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3.2" class="cm"/>`}).join('');
+  /* 標籤放喺落級位右上，互相太近就推高，避免重疊 */
+  labs.sort((a,b)=>a.x-b.x);const placed=[];
+  const labTxt=labs.map(L=>{/* 落級標籤放喺圓點左邊（曲線下面嘅空位）；終點旗放喺最後一級上面 */
+    let lx=L.fin?L.x-6:L.x-6,ly=L.fin?L.yp-6:L.y+4;
+    while(placed.some(q=>Math.abs(q.x-lx)<48&&Math.abs(q.y-ly)<12))ly+=13;placed.push({x:lx,y:ly});
+    return `<text x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" class="cl${L.fin?' fin':''}">${L.t}</text>`}).join('');
+  const yrs=P.map((p,i)=>p.m.endsWith('-01')?`<text x="${X(i).toFixed(1)}" y="${H-5}" class="cx">${p.m.slice(0,4)}</text><line x1="${X(i).toFixed(1)}" x2="${X(i).toFixed(1)}" y1="${pt}" y2="${H-pb}" class="cg"/>`:'').join('');
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="每月供款階梯圖"><defs><linearGradient id="cgf" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--pri)" stop-opacity=".35"/><stop offset="1" stop-color="var(--pri)" stop-opacity="0"/></linearGradient></defs>
+    ${yrs}<path d="${area}" fill="url(#cgf)"/><path d="${d}" class="cline" style="--len:${Math.ceil(len)}"/>${marks}${labTxt}
+    <text x="${pl}" y="11" class="cx">${fmt0(mx)}/月</text></svg>`}
+function loanCard(l){const r=lRem(l),p=lPct(l),due=dueSince(l);
+  return `<div class="loan${lDone(l)?' done':''}" onclick="editLoan('${esc(l.id)}')">
+   <div class="lh"><span class="li">${LOAN_ICON[l.type]||'💸'}</span><div class="lt"><b>${esc(l.name)}</b><small>${esc(l.lender||'')}${l.product?' · '+esc(l.product):''}</small></div>
+     <div class="lm">${l.monthly!=null?fmt(l.monthly):unk}<small>/月</small></div></div>
+   ${l.totalPeriods?`<div class="track"><i style="width:${(p*100).toFixed(1)}%"></i><span class="runner" style="left:${(p*100).toFixed(1)}%">${runnerOf(p)}</span><span class="goal">🏁</span></div>`:''}
+   <div class="lmeta">${l.totalPeriods?`<span>第 <b>${n(l.paidPeriods)}/${l.totalPeriods}</b> 期</span> · <span>仲有 <b>${r}</b> 期</span> · <span>仲要俾 ${fmt0(n(l.monthly)*r)}</span> · <span>完 ${ym(lEnd(l))}</span>`:'期數 未知（補返）'}</div>
+   <div class="lfoot">${rateBadge(l)}<span class="sub">本金 ${l.principal!=null&&l.principal!==''?fmt0(l.principal)+(l.principalEst?'（估算）':''):unk}${l.balance!=null&&l.balance!==''?` · 餘額 ${fmt0(l.balance)}${l.balanceAsOf?'（'+esc(l.balanceAsOf)+'）':''}`:''}</span>
+     ${r>0?`<button class="plus" onclick="event.stopPropagation();bumpLoan('${esc(l.id)}',this)">+1 期</button>`:''}</div>
+   <div class="quip">${loanQuip(l)}</div>
+   ${due?`<div class="nudge">📅 照供款日（每月 ${n(l.payDay)} 號）計，應該已經入咗第 ${n(l.paidPeriods)+due} 期 → 撳「+1 期」</div>`:''}</div>`}
+function vLoan(){
+  const st=loanStats(),L=live(S.loans),rev=L.filter(isRev),pend=L.filter(l=>!isRev(l)&&(l.status==='待確認'||!l.totalPeriods)),grads=st.F.filter(lDone);
+  if(!L.length)return `<div class="card hero"><h2>💸 貸款</h2><div class="sub">未有貸款紀錄。撳右下角 ＋ 加一條（私人貸款、卡分期都得）。</div></div><button class="fab" onclick="editLoan()">＋</button>`;
+  const months=st.last?mdiff(today(),st.last):0, sch=loanSchedule(st.A), pct=Math.round(st.pct*1000)/10;
+  const badges=[['🥾','起步',st.pct>0],['🥉','四分一',st.pct>=.25],['🥈','半山',st.pct>=.5],['🥇','四分三',st.pct>=.75],['🎓','首條畢業',st.done>0],['🏆','無債',st.pct>=1&&st.F.length>0]];
+  const sorter={end:(a,b)=>(lEnd(a)||'9').localeCompare(lEnd(b)||'9'),rate:(a,b)=>(lApr(b)??-1)-(lApr(a)??-1),amt:(a,b)=>n(b.monthly)*lRem(b)-n(a.monthly)*lRem(a)}[loanSort];
+  const A=st.A.slice().sort(sorter);
+  let list='';
+  if(loanGroup){const g={};A.forEach(l=>{const k=l.card||l.lender||'其他';(g[k]=g[k]||[]).push(l)});
+    list=Object.entries(g).sort((a,b)=>b[1].reduce((s,l)=>s+n(l.monthly),0)-a[1].reduce((s,l)=>s+n(l.monthly),0)).map(([k,ls])=>{
+      const m=ls.reduce((s,l)=>s+n(l.monthly),0),t=ls.reduce((s,l)=>s+n(l.monthly)*n(l.totalPeriods),0),pd=ls.reduce((s,l)=>s+n(l.monthly)*n(l.paidPeriods),0),e=ls.map(lEnd).filter(Boolean).sort().pop();
+      return `<details class="lgrp" open><summary><span>${/citi/i.test(k)?'💳':/hsbc/i.test(k)?'💳':'🏦'} <b>${esc(k)}</b> · ${ls.length} 條</span><span class="r">${fmt(m)}/月</span>
+        <div class="bar thin"><i style="width:${t?(pd/t*100).toFixed(1):0}%"></i></div><small class="note">已供 ${t?(pd/t*100).toFixed(0):0}% · 最遲 ${ym(e)} 完</small></summary>${ls.map(loanCard).join('')}</details>`}).join('')}
+  else list=A.map(loanCard).join('');
+  const rp=st.F.length?Math.round(st.pct*100):0;
+  return `<div class="card hero">
+    <div class="hrow"><svg class="ring" viewBox="0 0 120 120" aria-label="整體已供 ${pct}%"><circle cx="60" cy="60" r="50" class="rbg"/><circle id="lnRing" cx="60" cy="60" r="50" class="rfg" data-p="${st.pct}" stroke-dasharray="314.16" stroke-dashoffset="${(314.16*(1-lastLoanPct)).toFixed(2)}" transform="rotate(-90 60 60)"/>
+      <text x="60" y="60" class="rpct" id="lnPct">${pct}%</text><text x="60" y="80" class="rlbl">已供</text></svg>
+     <div class="hinfo"><div class="sub">🏁 還清日（最後一條）</div><div class="big">${st.last?ym(st.last):'—'}</div><div class="sub">${st.last?'仲有 <b>'+durTxt(months)+'</b>':'未有進行中嘅貸款'}</div></div></div>
+    ${mountainSvg()}
+    <div class="hquip">${heroQuip(st.pct)}</div>
+    <div class="hstats"><div><small>每月供款</small><b>${fmt0(st.monthly)}</b></div><div><small>仲要俾（連手續費）</small><b>${fmt0(st.remain)}</b></div><div><small>進行中</small><b>${st.A.length} 條</b></div></div>
+    ${st.nextGrp.length?`<div class="next">🎓 下一位畢業生：<b>${esc(st.nextGrp.map(l=>l.name).join('、'))}</b>（${ym(st.first)}，仲有 ${lRem(st.nextGrp[0])} 期）→ 每月慳 ${fmt0(st.nextGrp.reduce((s,l)=>s+n(l.monthly),0))}</div>`:''}
+    <div class="badges">${badges.map(([e,t,on])=>`<span class="bdg${on?' on':''}" title="${on?'已解鎖':'未解鎖'}">${e} ${t}</span>`).join('')}</div>
+  </div>
+  ${sch.pts.length?`<div class="card"><h2>📉 每月供款階梯（由 ${sch.pts[0].m} 起）</h2>${chartSvg(sch)}
+    <div class="drops">${sch.drops.slice(0,4).map(dp=>`<div class="row"><div class="l">${dp.fin?'🏁 <b>'+dp.m+' 起全部還清</b>':`<b>${dp.m}</b> 起每月慳 <b class="pos">${fmt0(dp.saved)}</b>`}<small class="note">${esc(dp.names.slice(0,3).join('、'))}${dp.names.length>3?` 等 ${dp.names.length} 條`:''} 畢業</small></div><div class="r">${fmt0(dp.now)}/月</div></div>`).join('')}
+    ${sch.drops.length>4?`<details><summary class="sub">睇晒 ${sch.drops.length} 個慳錢里程碑</summary>${sch.drops.slice(4).map(dp=>`<div class="row"><div class="l">${dp.fin?'🏁 '+dp.m+' 起全部還清':`${dp.m} 起每月慳 <b class="pos">${fmt0(dp.saved)}</b>`}<small class="note">${esc(dp.names.slice(0,3).join('、'))}${dp.names.length>3?` 等 ${dp.names.length} 條`:''}</small></div><div class="r">${fmt0(dp.now)}/月</div></div>`).join('')}</details>`:''}</div></div>`:''}
+  <div class="card"><div class="chips">${[['end','⏳ 最快完'],['rate','🔥 利率最貴'],['amt','💰 餘額最大']].map(([k,t])=>`<button class="${loanSort===k?'on':''}" onclick="loanSort='${k}';rerender(1)">${t}</button>`).join('')}
+    <button class="${loanGroup?'on':''}" onclick="loanGroup=!loanGroup;rerender(1)">🗂️ 按銀行分組</button></div>
+    ${list||'<div class="sub">冇進行中嘅貸款 🎉</div>'}</div>
+  ${rev.length?`<div class="card boss"><h2>👹 大魔王：循環卡數（冇固定期數，唔計入還清日同每月供款）</h2>${rev.map(l=>{const a=l.acctId&&live(S.accounts).find(x=>x.id===l.acctId);const bal=a&&a.stmtBal!=null?a.stmtBal:l.balance;const asOf=a&&a.stmtDate?a.stmtDate:l.balanceAsOf;
+      return `<div class="loan" onclick="editLoan('${esc(l.id)}')"><div class="lh"><span class="li">👹</span><div class="lt"><b>${esc(l.name)}</b><small>結欠 ${bal!=null?fmt(bal):unk}${asOf?'（月結單 '+esc(asOf)+'）':''}${l.minPay!=null?' · 最低還款 '+fmt(l.minPay):''}</small></div></div>
+        <div class="lfoot">${rateBadge(l)}</div><div class="quip">${lApr(l)!=null&&st.avgApr?`年利率 ${n(l.rate)}%，大約係你啲分期平均（${st.avgApr.toFixed(1)}%）嘅 ${Math.round(lApr(l)/st.avgApr)} 倍 — 有閒錢應該先打呢隻大佬`:'利息最貴，有閒錢先打佢'}</div>${l.notes?`<small class="note">${esc(l.notes)}</small>`:''}</div>`}).join('')}</div>`:''}
+  ${pend.length?`<div class="card"><h2>❓ 待確認</h2>${pend.map(l=>`<div class="loan" onclick="editLoan('${esc(l.id)}')"><div class="lh"><span class="li">${LOAN_ICON[l.type]||'💸'}</span><div class="lt"><b>${esc(l.name)}</b><small>${l.balance!=null?'舊檔餘額 '+fmt0(l.balance)+(l.balanceAsOf?'（'+esc(l.balanceAsOf)+'）':''):'餘額 未知（補返）'} · 每月 ${l.monthly!=null?fmt(l.monthly):'未知（補返）'}</small></div></div><small class="note">${esc(l.notes||'')}</small></div>`).join('')}</div>`:''}
+  ${grads.length?`<details class="card"><summary><b>🎓 畢業生（${grads.length}）</b></summary>${grads.map(loanCard).join('')}</details>`:''}
+  <div class="sub tip">📌 呢頁係<b>現行貸款嘅正本</b>：總覽嘅「每月分期負擔」用呢度計。🗓️ 分期 tab 嘅月結單合計同舊檔逐條明細只作參考（已連結 🔗），唔會重複計。「估算」= 由月結單數字推算，唔係銀行報價。</div>
+  <button class="fab" onclick="editLoan()">＋</button>`}
+function mountainSvg(){const [x,y]=trailPt(lastLoanPct);
+  return `<svg class="mtn" viewBox="0 0 300 124" aria-hidden="true"><defs><linearGradient id="mgr" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#a8e0cf"/><stop offset="1" stop-color="#2f8f75"/></linearGradient></defs>
+   <polygon points="0,124 0,104 40,84 70,70 100,90 140,52 175,34 200,50 250,14 300,58 300,124" fill="url(#mgr)"/>
+   <polygon points="250,14 236,32 244,29 251,35 259,29 266,30" fill="#fff" opacity=".92"/>
+   <polyline points="${TRAIL.map(p=>p.join(',')).join(' ')}" fill="none" stroke="#fff" stroke-width="2" stroke-dasharray="3 4" opacity=".85"/>
+   <text x="244" y="13" font-size="16">🚩</text><text x="268" y="120" font-size="11" fill="#fff" opacity=".9">還清山</text>
+   <text id="lnClimber" x="${x.toFixed(1)}" y="${(y-2).toFixed(1)}" font-size="20" text-anchor="middle">🧗</text></svg>`}
+function loanAnimate(){const ring=$('#lnRing');if(!ring)return;const to=+ring.dataset.p||0,from=lastLoanPct,rm=RM();
+  const setC=p=>{const [x,y]=trailPt(p);const c=$('#lnClimber');if(c){c.setAttribute('x',x.toFixed(1));c.setAttribute('y',(y-2).toFixed(1))}const t=$('#lnPct');if(t)t.textContent=(Math.round(p*1000)/10)+'%'};
+  if(rm||Math.abs(to-from)<1e-4){ring.style.strokeDashoffset=(314.16*(1-to)).toFixed(2);setC(to);lastLoanPct=to;return}
+  requestAnimationFrame(()=>{ring.style.transition='stroke-dashoffset 1.2s cubic-bezier(.3,.7,.3,1)';ring.style.strokeDashoffset=(314.16*(1-to)).toFixed(2)});
+  const t0=performance.now(),D=1200;const step=t=>{const k=Math.min(1,(t-t0)/D),e=1-Math.pow(1-k,3);setC(from+(to-from)*e);if(k<1)requestAnimationFrame(step)};requestAnimationFrame(step);lastLoanPct=to}
+function toast(msg,ms=2600){const t=document.createElement('div');t.className='toast';t.textContent=msg;document.body.appendChild(t);requestAnimationFrame(()=>t.classList.add('on'));setTimeout(()=>{t.classList.remove('on');setTimeout(()=>t.remove(),400)},ms)}
+function confetti(x,y,count=36,big=false){if(RM())return;const box=document.createElement('div');box.className='confetti';document.body.appendChild(box);
+  const col=['#1f6f5c','#4fb39a','#f2b134','#e4572e','#7b61ff','#29a3d6','#ff7eb6'];
+  for(let i=0;i<count;i++){const p=document.createElement('i');p.style.left=x+'px';p.style.top=y+'px';p.style.background=col[i%col.length];if(i%3===0)p.style.borderRadius='50%';box.appendChild(p);
+    const a=Math.random()*Math.PI*2,v=(big?160:80)+Math.random()*(big?220:110),dx=Math.cos(a)*v,up=(big?240:130)+Math.random()*80;
+    p.animate([{transform:'translate(0,0) rotate(0)',opacity:1},{transform:`translate(${dx*.7}px,${-up}px) rotate(${Math.random()*360}deg)`,opacity:1,offset:.35},{transform:`translate(${dx}px,${big?380:220}px) rotate(${Math.random()*900}deg)`,opacity:0}],{duration:(big?1900:1200)+Math.random()*600,easing:'cubic-bezier(.2,.6,.4,1)',fill:'forwards'})}
+  setTimeout(()=>box.remove(),2900)}
+function graduate(l){const o=document.createElement('div');o.className='grad';o.innerHTML=`<div class="gbox"><div class="gemo">🎓</div><div class="gt">畢業！</div><div>${esc(l.name)}</div><div class="sub">由下個月起每月慳返 <b>${fmt(l.monthly)}</b> 🎉</div></div>`;
+  o.onclick=()=>o.remove();document.body.appendChild(o);requestAnimationFrame(()=>o.classList.add('on'));confetti(innerWidth/2,innerHeight/2.6,90,true);setTimeout(()=>{o.classList.remove('on');setTimeout(()=>o.remove(),400)},3200)}
+function bumpLoan(id,btn){const l=S.loans.find(x=>x.id===id);if(!l||!(lRem(l)>0))return;
+  const rc=btn&&btn.getBoundingClientRect?btn.getBoundingClientRect():{left:innerWidth/2,top:innerHeight/2,width:0,height:0};
+  l.paidPeriods=n(l.paidPeriods)+1;l.paidAsOf=today();loanDerive(l);l.updatedAt=stamp(l.updatedAt);Sync.queue('loans',l);save();rerender(1);
+  if(lRem(l)===0)graduate(l);else{confetti(rc.left+rc.width/2,rc.top+rc.height/2);toast(lRem(l)<=3?`仲有 ${lRem(l)} 期！打大佬前最後幾關 👾`:PLUS_MSG[Math.floor(Math.random()*PLUS_MSG.length)])}}
+function editLoan(id){
+  const l=id?S.loans.find(x=>x.id===id):{id:uid('L'),name:'',lender:'',type:'卡分期',card:'',status:'進行中',paidPeriods:0,paidAsOf:today(),startDate:today()};
+  const before=n(l.paidPeriods), remBefore=lRem(l);
+  form(id?'修改貸款':'新增貸款',[
+    {k:'name',l:'名稱',req:1},{k:'lender',l:'貸款機構／銀行'},{k:'type',l:'類型',opts:LOAN_TYPES},{k:'card',l:'分組（例如 Citibank VISA）'},{k:'product',l:'產品（PayLite／BT IPP…）'},
+    {k:'monthly',l:'每月供款（HKD）',t:'number'},{k:'totalPeriods',l:'總期數',t:'number'},{k:'paidPeriods',l:'已供期數',t:'number'},{k:'payDay',l:'每月供款日（幾號）',t:'number'},
+    {k:'startDate',l:'第 1 期日期',t:'date'},{k:'principal',l:'本金（唔知就留空）',t:'number'},{k:'principalEst',l:'本金係估算',t:'check'},
+    {k:'rate',l:'利率 %（唔知就留空）',t:'number'},{k:'rateType',l:'利率類型',opts:RATE_TYPES},{k:'rateEst',l:'利率係估算',t:'check'},{k:'aprEst',l:'折合實際年利率 %（估算，月平息先用）',t:'number'},
+    {k:'balance',l:'尚欠本金（月結單）',t:'number'},{k:'balanceAsOf',l:'餘額日期'},{k:'status',l:'狀態',opts:LOAN_ST},
+    {k:'revolving',l:'循環結欠（冇固定期數，例如卡數）',t:'check'},{k:'minPay',l:'最低還款（循環結欠用）',t:'number'},
+    {k:'rateNote',l:'利率備註',t:'area'},{k:'source',l:'來源',t:'area'},{k:'notes',l:'備註',t:'area'}],
+    l,o=>{if(o.paidPeriods!==before)o.paidAsOf=today();if(o.totalPeriods&&n(o.paidPeriods)>n(o.totalPeriods))o.paidPeriods=o.totalPeriods;
+      loanDerive(o);upsertLocal('loans',o,!id);if(remBefore>0&&lDone(o))setTimeout(()=>graduate(o),50)},
+    id?()=>tombstone('loans',id):null);
+}
+
 /* ---------- 雲端同步（Google Sheets，Apps Script web app） ---------- */
-const TABLES={transactions:'Transactions',accounts:'Accounts',installments:'Installments',wishlist:'Wishlist',salary:'Salary',forecast:'Forecast',bonus:'Bonus',archive:'Archive'};
+const TABLES={transactions:'Transactions',accounts:'Accounts',installments:'Installments',wishlist:'Wishlist',salary:'Salary',forecast:'Forecast',bonus:'Bonus',archive:'Archive',loans:'Loans'};
 const Sync={
   cfg(){try{return JSON.parse(localStorage.getItem(SYNC_KEY)||'{}')}catch(_){return {}}},
   setCfg(p){const c={...this.cfg(),...p};localStorage.setItem(SYNC_KEY,JSON.stringify(c));return c},
