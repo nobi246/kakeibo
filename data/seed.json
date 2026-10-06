@@ -1,0 +1,30 @@
+{
+ "version": 1,
+ "generatedAt": "空白範本",
+ "source": "未匯入資料（設定 → 匯入 JSON）",
+ "burden": {
+  "citi": 0,
+  "hsbc": 0,
+  "cncbi": 0
+ },
+ "accounts": [],
+ "transactions": [],
+ "installments": [],
+ "wishlist": [],
+ "categories": [
+  "住屋",
+  "家用孝親",
+  "保險",
+  "公用事業",
+  "交通",
+  "餐飲",
+  "嗜好通販",
+  "訂閱",
+  "稅",
+  "人情",
+  "分期還款",
+  "轉帳",
+  "收入",
+  "其他"
+ ]
+}
