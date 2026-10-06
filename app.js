@@ -40,6 +40,11 @@ async function load(){
   normalize();
   txMonth=ovMonth=today().slice(0,7); ovYear=today().slice(0,4);
   render();
+  const m=location.hash.match(/^#sync=([A-Za-z0-9_-]+)/);
+  if(m){try{const b=m[1].replace(/-/g,'+').replace(/_/g,'/');const j=JSON.parse(decodeURIComponent(escape(atob(b+'==='.slice((b.length+3)%4)))));
+    if(j.u&&j.t){Sync.setCfg({url:j.u,token:j.t});history.replaceState(null,'',location.pathname);tab='overview';
+      await Sync.syncNow(true);alert(Sync.cfg().lastError?('同步設定咗，但未成功：'+Sync.cfg().lastError):'雲端同步已設定好 ✓');rerender(1)}}catch(_){alert('同步連結唔啱')}
+    window.addEventListener('online',()=>Sync.flush());setInterval(()=>Sync.flush(),60000);return}
   Sync.auto();
 }
 function normalize(){
