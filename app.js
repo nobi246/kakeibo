@@ -67,7 +67,7 @@ async function load(){
   Sync.auto();
 }
 function normalize(){
-  ['accounts','transactions','installments','wishlist','categories','salary','forecast','bonus','archive','loans'].forEach(k=>{if(!Array.isArray(S[k]))S[k]=[]});
+  ['accounts','transactions','installments','wishlist','categories','salary','forecast','bonus','archive','loans','recurring'].forEach(k=>{if(!Array.isArray(S[k]))S[k]=[]});
   if(!S.burden)S.burden={};
 }
 
@@ -90,11 +90,11 @@ const monthTx=m=>live(S.transactions).filter(t=>(t.date||'').startsWith(m));
 const sheetOf=t=>(t.src||'').replace(/^xlsx:/,'').split('!')[0];
 
 /* ---------- 畫面 ---------- */
-const TITLES={overview:'總覽',tx:'記帳',accounts:'帳戶',inst:'分期',loan:'貸款',wish:'Wishlist',pay:'人工／預測'};
+const TITLES={overview:'總覽',tx:'記帳',accounts:'帳戶',inst:'分期',loan:'貸款',fixed:'每月固定支出',wish:'Wishlist',pay:'人工／預測'};
 function render(){
   $('#title').textContent=TITLES[tab];
   document.querySelectorAll('.tabs button').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));
-  $('#view').innerHTML=({overview:vOverview,tx:vTx,accounts:vAccounts,inst:vInst,loan:vLoan,wish:vWish,pay:vPay})[tab]();
+  $('#view').innerHTML=({overview:vOverview,tx:vTx,accounts:vAccounts,inst:vInst,loan:vLoan,fixed:vFixed,wish:vWish,pay:vPay})[tab]();
   Sync.badge();
   if(tab==='loan')loanAnimate();
 }
@@ -115,6 +115,7 @@ function vOverview(){
     <div class="card"><h2>本月支出</h2><div class="big">${fmt0(spend)}</div><div class="sub">${mt.length} 筆 · 收入 ${fmt0(inc)}</div></div>
     <div class="card"${loanMode()?` onclick="tab='loan';render()"`:''}><h2>每月分期負擔</h2><div class="big">${fmt0(burden())}</div><div class="sub">${burdenParts().map(([k,v])=>esc(k)+' '+fmt0(v)).join(' · ')}${loanMode()&&loanStats().last?`<br>🏁 還清日 ${ym(loanStats().last)} →`:''}</div></div>
   </div>
+  ${live(S.recurring).length?(()=>{const f=fxStats();return `<div class="card" onclick="tab='fixed';history.replaceState(null,'','#fixed');render()"><h2>📌 每月固定支出</h2><div class="big">${fmt0(f.total)}</div><div class="sub">💸 貸款／分期 ${fmt0(f.loans)} + 📺 其他 ${fmt0(f.other)}（訂閱 ${fmt0(f.subs)}）→</div></div>`})():''}
   <div class="card"><h2>Citi + HSBC 卡數總額（月結單日，含未入帳分期）</h2>
     <div class="big neg">${fmt0(exp)}</div>
     <div class="sub">扣月結單後還款 ≈ <b>${fmt0(aft)}</b>（未計新簽帳及利息，只係估算）</div>
@@ -494,9 +495,131 @@ function editLoan(id){
     id?()=>tombstone('loans',id):null);
 }
 
+/* ---------- 每月固定支出（訂閱、水電煤、電話上網、保險、租金、泊車…；貸款／分期直接讀 💸 貸款，唔另存） ---------- */
+let fxDay='', fxShowOff=false;
+const RC_KINDS=['訂閱','水電煤','電話上網','保險','租金管理費','泊車','其他'];
+const RC_CATS=['AI','工具','娛樂','成人','雲端儲存','遊戲','其他'];
+const RC_ST=['生效中','試用中','可能已停','已取消','待確認','搵唔到紀錄，請補'];
+const RC_CYCLES=['每月','每週','每兩月','每季','每四個月','每半年','每年','不定期'];
+const RC_STEP={'每月':1,'每兩月':2,'每季':3,'每四個月':4,'每半年':6,'每年':12};
+const RC_PER_MONTH={'每週':52/12,'每月':1,'每兩月':1/2,'每季':1/3,'每四個月':1/4,'每半年':1/6,'每年':1/12};
+const RC_ICON={'訂閱':'📺','水電煤':'💡','電話上網':'📶','保險':'🛡️','租金管理費':'🏠','泊車':'🅿️','其他':'📦'};
+const CAT_ICON={'AI':'🤖','工具':'🛠️','娛樂':'🎬','成人':'🔒','雲端儲存':'☁️','遊戲':'🎮','其他':'✨'};
+const ST_PILL={'生效中':'ok','試用中':'amber','可能已停':'red','已取消':'','待確認':'amber','搵唔到紀錄，請補':'red'};
+const ICHIBAN=80;   // 一番賞一抽大約 $80（講笑用）
+const rcOn=r=>r.status==='生效中'||r.status==='試用中';
+const rcAdult=r=>!!r.adult||r.category==='成人';
+const rcPerMonth=r=>RC_PER_MONTH[r.cycle||'每月']||0;
+const rcHas=r=>r.hkd!=null&&r.hkd!==''&&isFinite(r.hkd);
+const rcCounted=r=>rcOn(r)&&rcHas(r)&&rcPerMonth(r)>0;
+const rcMonthly=r=>rcCounted(r)?n(+r.hkd)*rcPerMonth(r):0;
+const rcName=r=>rcAdult(r)?'🔒 私人項目':r.name;
+const isoD=s=>/^\d{4}-\d{2}-\d{2}$/.test(String(s||''));
+const withDay=(iso,day)=>{if(!day)return iso;const [y,m]=iso.split('-').map(Number);const dim=new Date(Date.UTC(y,m,0)).getUTCDate();return iso.slice(0,8)+String(Math.min(n(+day),dim)).padStart(2,'0')};
+const addDays=(iso,k)=>{const d=new Date(iso+'T00:00:00Z');d.setUTCDate(d.getUTCDate()+k);return d.toISOString().slice(0,10)};
+const dayDiff=(a,b)=>Math.round((new Date(b+'T00:00:00Z')-new Date(a+'T00:00:00Z'))/864e5);
+/* 某個月份（YYYY-MM）入面會扣數嘅日子 */
+function rcOccur(r,m){
+  if(!rcOn(r)||r.cycle==='不定期')return [];
+  const anchor=isoD(r.lastDate)?r.lastDate:isoD(r.nextDate)?r.nextDate:null;
+  if(r.cycle==='每週'){if(!anchor)return [];let d=anchor;const s=m+'-01';while(d<s)d=addDays(d,7);while(addDays(d,-7)>=s)d=addDays(d,-7);const out=[];while(d.startsWith(m)){out.push(d);d=addDays(d,7)}return out}
+  const st=RC_STEP[r.cycle||'每月']||1;
+  if(!anchor){return st===1&&r.day?[withDay(m+'-01',r.day)]:[]}
+  const k=mdiff(anchor,m+'-01');if(k%st!==0)return [];
+  return [withDay(m+'-01',r.day||+anchor.slice(8,10))]}
+/* 下次扣數（今日或之後） */
+function rcNext(r){
+  if(!rcOn(r)||r.cycle==='不定期')return '';const t=today();
+  if(isoD(r.nextDate)&&r.nextDate>=t&&(!isoD(r.lastDate)||r.nextDate>r.lastDate))return r.nextDate;
+  let m=t.slice(0,7);for(let i=0;i<14;i++){const ds=rcOccur(r,m).filter(d=>d>=t&&(!isoD(r.lastDate)||d>r.lastDate));if(ds.length)return ds[0];m=addMonths(m+'-01',1).slice(0,7)}
+  return ''}
+const loanOccur=(l,m)=>{if(!l.payDay)return [];const d=withDay(m+'-01',l.payDay);const e=lEnd(l);return (!e||ym(d)<=ym(e))&&(lRem(l)>0)?[d]:[]};
+const loanNext=l=>{const t=today();let m=t.slice(0,7);for(let i=0;i<3;i++){const d=loanOccur(l,m).find(x=>x>=t);if(d)return d;m=addMonths(m+'-01',1).slice(0,7)}return ''};
+function fxEvents(m){
+  const ev=[];live(S.recurring).forEach(r=>rcOccur(r,m).forEach(d=>ev.push({d,name:rcName(r),amt:rcHas(r)?n(+r.hkd):null,icon:rcAdult(r)?'🔒':(r.kind==='訂閱'?CAT_ICON[r.category]||'📺':RC_ICON[r.kind]||'📦'),id:r.id,loan:0})));
+  activeLoans().forEach(l=>loanOccur(l,m).forEach(d=>ev.push({d,name:l.name,amt:n(l.monthly),icon:'💸',id:l.id,loan:1})));
+  return ev.sort((a,b)=>a.d.localeCompare(b.d)||n(b.amt)-n(a.amt))}
+const whenTxt=d=>{const k=dayDiff(today(),d);return k===0?'今日':k===1?'聽日':k===2?'後日':k+' 日後'};
+function fxStats(){
+  const R=live(S.recurring), on=R.filter(rcCounted);
+  const other=on.reduce((s,r)=>s+rcMonthly(r),0), loans=loanMode()?activeLoans().reduce((s,l)=>s+n(l.monthly),0):burden();
+  const subs=on.filter(r=>r.kind==='訂閱').reduce((s,r)=>s+rcMonthly(r),0);
+  const pend=R.filter(r=>r.status==='待確認'||r.status==='搵唔到紀錄，請補');
+  return {R,on,other,loans,total:other+loans,subs,pend,pendAmt:pend.filter(r=>rcHas(r)&&rcPerMonth(r)).reduce((s,r)=>s+n(+r.hkd)*rcPerMonth(r),0)}}
+function rcRow(r){
+  const nx=rcNext(r), pm=rcPerMonth(r);
+  const cyc=r.cycle&&r.cycle!=='每月'?r.cycle:'';
+  const amt=rcHas(r)?fmt(+r.hkd)+(cyc?`<small class="note">${esc(cyc)}${pm&&r.cycle!=='每週'?' ≈ '+fmt0(n(+r.hkd)*pm)+'/月':''}</small>`:'<small class="note">/月</small>'):'<span class="unk">金額未知</span>';
+  const fx=r.currency&&r.currency!=='HKD'&&r.amount!=null&&r.amount!==''?` · ${esc(r.currency)} ${esc(r.amount)}`:'';
+  const ic=r.kind==='訂閱'?(CAT_ICON[r.category]||'📺'):(RC_ICON[r.kind]||'📦');
+  return `<div class="row rc${rcOn(r)?'':' off'}" onclick="editRc('${esc(r.id)}')"><div class="l"><span class="rci">${ic}</span>${esc(r.name)}
+    <span class="pill ${ST_PILL[r.status]||''}">${esc(r.status||'生效中')}</span>${r.flag?` <span class="pill red">⚠️ ${esc(r.flag)}</span>`:''}${r.est?' <span class="pill">估算</span>':''}
+    <small class="note">${r.day&&(r.cycle||'每月')==='每月'?'每月 '+esc(r.day)+' 號 · ':''}${nx?'下次 '+nx+'（'+whenTxt(nx)+'）':r.lastDate?'上次 '+esc(r.lastDate):''}${r.account?' · '+esc(r.account):''}${fx}</small></div>
+    <div class="r">${amt}${rcOn(r)?`<br><button class="mini" onclick="event.stopPropagation();cancelRc('${esc(r.id)}')">標記已取消</button>`:''}</div></div>`}
+function loanFxRow(l){const nx=loanNext(l);
+  return `<div class="row rc" onclick="tab='loan';history.replaceState(null,'','#loan');rerender()"><div class="l"><span class="rci">💸</span>${esc(l.name)} <span class="pill">第 ${n(l.paidPeriods)}/${n(l.totalPeriods)} 期</span>
+    <small class="note">${l.payDay?'每月 '+n(l.payDay)+' 號 · ':''}${nx?'下次 '+nx+'（'+whenTxt(nx)+'）· ':''}仲有 ${lRem(l)} 期 · ${esc(l.card||l.lender||'')}</small></div><div class="r">${fmt(l.monthly)}<small class="note">/月 →</small></div></div>`}
+function vFixed(){
+  const st=fxStats(), t=today(), m=t.slice(0,7), ev=fxEvents(m), nextM=addMonths(m+'-01',1).slice(0,7);
+  const up=[...ev,...fxEvents(nextM)].filter(e=>e.d>=t), nxt=up[0];
+  const dim=new Date(Date.UTC(+m.slice(0,4),+m.slice(5,7),0)).getUTCDate();
+  const byDay={};ev.forEach(e=>(byDay[e.d]=byDay[e.d]||[]).push(e));
+  const strip=[...Array(dim)].map((_,i)=>{const d=m+'-'+String(i+1).padStart(2,'0'),L=byDay[d]||[],s=L.reduce((a,e)=>a+n(e.amt),0);
+    return `<button class="cday${d===t?' today':''}${d<t?' past':''}${L.length?' has':''}${fxDay===d?' sel':''}" onclick="fxDay=fxDay==='${d}'?'':'${d}';rerender(1)"><b>${i+1}</b><i>${L.length?(L.length>3?'●●●':'●'.repeat(L.length)):''}</i><small>${s?fmt0(s).replace('$',''):''}</small></button>`}).join('');
+  const sel=fxDay&&fxDay.startsWith(m)?(byDay[fxDay]||[]):null;
+  const dayList=sel?`<div class="sub" style="margin-top:6px"><b>${fxDay}</b>：${sel.length?sel.map(e=>`${e.icon} ${esc(e.name)} ${e.amt!=null?fmt0(e.amt):'金額未知'}`).join('、'):'冇扣數'}</div>`:'';
+  const tl=up.filter(e=>dayDiff(t,e.d)<=31).slice(0,12);
+  const R=st.R, adult=R.filter(rcAdult), normal=R.filter(r=>!rcAdult(r));
+  const shown=normal.filter(r=>fxShowOff||r.status!=='已取消'&&r.status!=='可能已停'), offN=normal.length-normal.filter(r=>r.status!=='已取消'&&r.status!=='可能已停').length;
+  const grp=(title,L,open=true)=>{if(!L.length)return '';const s=L.reduce((a,r)=>a+rcMonthly(r),0);
+    return `<details class="lgrp"${open?' open':''}><summary><span>${title} · ${L.length} 項</span><span class="r">${fmt0(s)}/月</span></summary>${L.sort((a,b)=>(rcOn(b)-rcOn(a))||rcMonthly(b)-rcMonthly(a)).map(rcRow).join('')}</details>`};
+  const subs=shown.filter(r=>r.kind==='訂閱');
+  const subGroups=RC_CATS.filter(c=>c!=='成人').map(c=>grp(`${CAT_ICON[c]} ${c}`,subs.filter(r=>(r.category||'其他')===c))).join('')+grp('✨ 其他',subs.filter(r=>!RC_CATS.includes(r.category)));
+  const kindGroups=RC_KINDS.filter(k=>k!=='訂閱').map(k=>grp(`${RC_ICON[k]} ${k}`,shown.filter(r=>r.kind===k))).join('')+grp('📦 未分類',shown.filter(r=>!RC_KINDS.includes(r.kind)));
+  const A=activeLoans().slice().sort((a,b)=>(loanNext(a)||'9').localeCompare(loanNext(b)||'9'));
+  const aOn=adult.filter(rcCounted), aAmt=aOn.reduce((s,r)=>s+rcMonthly(r),0);
+  const draws=Math.round(st.subs/ICHIBAN);
+  return `<div class="card hero fx">
+    <h2>📌 每月固定開支合計</h2><div class="big">${fmt0(st.total)}<span class="sub"> /月</span></div>
+    <div class="fxsplit"><div onclick="tab='loan';history.replaceState(null,'','#loan');rerender()"><small>💸 貸款／分期 →</small><b>${fmt0(st.loans)}</b></div><div><small>📺 其他固定支出</small><b>${fmt0(st.other)}</b></div><div><small>一年合計</small><b>${fmt0(st.total*12)}</b></div></div>
+    <div class="bar fxbar"><i style="width:${st.total?(st.loans/st.total*100).toFixed(1):0}%"></i></div>
+    ${nxt?`<div class="next">⏭️ 下一筆扣數：<b>${esc(nxt.name)}</b> ${nxt.amt!=null?fmt(nxt.amt):'金額未知'} · ${nxt.d}（${whenTxt(nxt.d)}）</div>`:''}
+    ${st.subs?`<div class="hquip">🎰 每月訂閱食咗你 ${fmt0(st.subs)}，等於 ${draws} 抽一番賞（一抽當 $${ICHIBAN}）；一年 ${fmt0(st.subs*12)}</div>`:''}
+    ${st.pend.length?`<div class="sub">❓ 未計入：${st.pend.length} 項待確認／搵唔到紀錄${st.pendAmt?`（估計約 ${fmt0(st.pendAmt)}/月）`:''}，喺下面逐項補返。</div>`:''}
+  </div>
+  <div class="card"><h2>🗓️ ${m.slice(0,4)} 年 ${+m.slice(5,7)} 月扣數日曆</h2><div class="cstrip">${strip}</div>${dayList}
+    <div class="sub">本月合共 ${ev.length} 筆 · ${fmt0(ev.reduce((s,e)=>s+n(e.amt),0))}（撳日子睇明細）</div></div>
+  <div class="card"><h2>⏳ 下次扣數（未來 31 日）</h2>${tl.length?tl.map(e=>`<div class="row tl"><div class="l"><span class="tld">${e.d.slice(5)}</span>${e.icon} ${esc(e.name)}<small class="note">${whenTxt(e.d)}</small></div><div class="r">${e.amt!=null?fmt(e.amt):'金額未知'}</div></div>`).join(''):'<div class="sub">未來一個月冇已知扣數</div>'}</div>
+  <div class="card"><h2>📺 訂閱</h2>${subGroups||'<div class="sub">未有訂閱紀錄。撳右下角 ＋ 加。</div>'}
+    ${adult.length?`<details class="lgrp rc-private"><summary><span>🔒 私人 · ${adult.length} 項</span><span class="r">${fmt0(aAmt)}/月</span></summary><div class="sub">撳開先顯示名稱。</div>${adult.sort((a,b)=>(rcOn(b)-rcOn(a))||rcMonthly(b)-rcMonthly(a)).map(rcRow).join('')}</details>`:''}</div>
+  <div class="card"><h2>🏠 其他固定支出</h2>${kindGroups||'<div class="sub">未有紀錄</div>'}</div>
+  <div class="card"><h2>💸 貸款／分期（讀自貸款 tab，唔重複儲存）</h2>
+    <details class="lgrp"><summary><span>${A.length} 條進行中</span><span class="r">${fmt0(st.loans)}/月</span></summary>${A.map(loanFxRow).join('')||'<div class="sub">冇進行中嘅貸款</div>'}</details>
+    <div class="sub">撳任何一條跳去 💸 貸款 tab 改期數。循環卡數冇固定月供，唔計入。</div></div>
+  <div class="actions">${offN?`<button onclick="fxShowOff=!fxShowOff;rerender(1)">${fxShowOff?'收埋':'顯示'}已停／已取消（${offN}）</button>`:''}<button onclick="editRc()">＋ 新增固定支出</button></div>
+  <div class="sub tip">📌 每月合計只計「生效中／試用中」而有金額嘅項目；年費÷12、每週×52÷12。貸款／分期直接用 💸 貸款 tab（同總覽「每月分期負擔」一樣），呢度唔會再存一次，所以唔會重複計。</div>
+  <button class="fab" onclick="editRc()">＋</button>`}
+function cancelRc(id){const r=S.recurring.find(x=>x.id===id);if(!r||!confirm(`標記「${rcAdult(r)?'呢個私人項目':r.name}」為已取消？（只係改紀錄，唔會幫你取消訂閱）`))return;
+  r.status='已取消';r.cancelledAt=today();r.updatedAt=stamp(r.updatedAt);Sync.queue('recurring',r);save();rerender(1);toast('已標記為已取消 ✂️ 每月慳返 '+fmt0(n(+r.hkd)*rcPerMonth(r)))}
+function editRc(id){
+  const r=id?S.recurring.find(x=>x.id===id):{id:uid('rc-'),kind:'訂閱',category:'其他',name:'',cycle:'每月',currency:'HKD',status:'生效中',firstSeen:today()};
+  form(id?'修改固定支出':'新增固定支出',[
+    {k:'name',l:'名稱',req:1},{k:'kind',l:'種類',opts:RC_KINDS},{k:'category',l:'訂閱分類（只限訂閱）',opts:['',...RC_CATS]},
+    {k:'hkd',l:'每次扣數（HKD）',t:'number'},{k:'amount',l:'原幣金額',t:'number'},{k:'currency',l:'貨幣（HKD／USD／JPY…）'},
+    {k:'cycle',l:'週期',opts:RC_CYCLES},{k:'day',l:'每月扣數日（幾號）',t:'number'},{k:'account',l:'卡／帳戶',opts:['',...acctNames(),'PayPal 餘額']},
+    {k:'merchant',l:'帳單商戶名'},{k:'lastDate',l:'上次扣數',t:'date'},{k:'nextDate',l:'下次扣數（留空自動計）',t:'date'},{k:'firstSeen',l:'第一次見',t:'date'},
+    {k:'status',l:'狀態',opts:RC_ST},{k:'flag',l:'提示（例如 重複？）'},{k:'est',l:'金額係估算',t:'check'},{k:'adult',l:'私人（收埋喺 🔒 分組）',t:'check'},
+    {k:'evidence',l:'證據（交易／電郵）',t:'area'},{k:'txIds',l:'連結交易 id（逗號分隔）',t:'area'},{k:'notes',l:'備註',t:'area'}],
+    r,o=>{if(o.status==='已取消'&&!o.cancelledAt)o.cancelledAt=today();upsertLocal('recurring',o,!id)},id?()=>tombstone('recurring',id):null);
+  const ids=String(r.txIds||'').split(/[,\s]+/).filter(Boolean);
+  if(ids.length){const m=new Map(live(S.transactions).map(t=>[t.id,t]));const L=ids.map(i=>m.get(i)).filter(Boolean).sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+    const box=document.createElement('div');box.className='sub';box.innerHTML=`🔗 已連結 ${L.length} 筆交易：<br>`+L.slice(0,12).map(t=>`${t.date} ${fmt(t.amount)} · ${esc(t.account)}`).join('<br>')+(L.length>12?`<br>…仲有 ${L.length-12} 筆`:'');
+    const act=$('#dlgForm .actions');if(act)act.before(box)}
+}
+
 /* ---------- 雲端同步（Google Sheets，Apps Script web app） ---------- */
-const TABLES={transactions:'Transactions',accounts:'Accounts',installments:'Installments',wishlist:'Wishlist',salary:'Salary',forecast:'Forecast',bonus:'Bonus',archive:'Archive',loans:'Loans'};
-const TBL_LABEL={transactions:'交易',accounts:'帳戶',installments:'分期',wishlist:'Wishlist',salary:'人工',forecast:'預測',bonus:'花紅',archive:'舊檔',loans:'貸款'};
+const TABLES={transactions:'Transactions',accounts:'Accounts',installments:'Installments',wishlist:'Wishlist',salary:'Salary',forecast:'Forecast',bonus:'Bonus',archive:'Archive',loans:'Loans',recurring:'Recurring'};
+const TBL_LABEL={transactions:'交易',accounts:'帳戶',installments:'分期',wishlist:'Wishlist',salary:'人工',forecast:'預測',bonus:'花紅',archive:'舊檔',loans:'貸款',recurring:'固定支出'};
 const fmtInt=x=>Number(x||0).toLocaleString('en-HK');
 const syncErr=(code,extra)=>Object.assign(new Error(code),{code},extra||{});
 const Sync={
