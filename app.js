@@ -496,7 +496,7 @@ function editLoan(id){
 }
 
 /* ---------- 每月固定支出（訂閱、水電煤、電話上網、保險、租金、泊車…；貸款／分期直接讀 💸 貸款，唔另存） ---------- */
-let fxDay='', fxShowOff=false;
+let fxDay='', fxShowOff=false, fxFilter='life';
 const RC_KINDS=['訂閱','水電煤','電話上網','保險','租金管理費','泊車','其他'];
 const RC_CATS=['AI','工具','娛樂','成人','雲端儲存','遊戲','其他'];
 const RC_ST=['生效中','試用中','可能已停','已取消','待確認','搵唔到紀錄，請補'];
@@ -536,9 +536,11 @@ function rcNext(r){
 const loanOccur=(l,m)=>{if(!l.payDay)return [];const d=withDay(m+'-01',l.payDay);const e=lEnd(l);return (!e||ym(d)<=ym(e))&&(lRem(l)>0)?[d]:[]};
 const loanNext=l=>{const t=today();let m=t.slice(0,7);for(let i=0;i<3;i++){const d=loanOccur(l,m).find(x=>x>=t);if(d)return d;m=addMonths(m+'-01',1).slice(0,7)}return ''};
 function fxEvents(m){
-  const ev=[];live(S.recurring).forEach(r=>rcOccur(r,m).forEach(d=>ev.push({d,name:rcName(r),amt:rcHas(r)?n(+r.hkd):null,icon:rcAdult(r)?'🔒':(r.kind==='訂閱'?CAT_ICON[r.category]||'📺':RC_ICON[r.kind]||'📦'),id:r.id,loan:0})));
-  activeLoans().forEach(l=>loanOccur(l,m).forEach(d=>ev.push({d,name:l.name,amt:n(l.monthly),icon:'💸',id:l.id,loan:1})));
+  const ev=[];live(S.recurring).forEach(r=>rcOccur(r,m).forEach(d=>ev.push({d,name:rcName(r),amt:rcHas(r)?n(+r.hkd):null,icon:rcAdult(r)?'🔒':(r.kind==='訂閱'?CAT_ICON[r.category]||'📺':RC_ICON[r.kind]||'📦'),id:r.id,loan:0,kind:r.kind||'其他'})));
+  activeLoans().forEach(l=>loanOccur(l,m).forEach(d=>ev.push({d,name:l.name,amt:n(l.monthly),icon:'💸',id:l.id,loan:1,kind:'貸款'})));
   return ev.sort((a,b)=>a.d.localeCompare(b.d)||n(b.amt)-n(a.amt))}
+const fxKeep=e=>fxFilter==='all'?1:fxFilter==='loan'?e.loan: !e.loan;
+const FX_FILT=[['life','生活固定'],['loan','貸款分期'],['all','全部']];
 const whenTxt=d=>{const k=dayDiff(today(),d);return k===0?'今日':k===1?'聽日':k===2?'後日':k+' 日後'};
 function fxStats(){
   const R=live(S.recurring), on=R.filter(rcCounted);
@@ -560,15 +562,17 @@ function loanFxRow(l){const nx=loanNext(l);
   return `<div class="row rc" onclick="tab='loan';history.replaceState(null,'','#loan');rerender()"><div class="l"><span class="rci">💸</span>${esc(l.name)} <span class="pill">第 ${n(l.paidPeriods)}/${n(l.totalPeriods)} 期</span>
     <small class="note">${l.payDay?'每月 '+n(l.payDay)+' 號 · ':''}${nx?'下次 '+nx+'（'+whenTxt(nx)+'）· ':''}仲有 ${lRem(l)} 期 · ${esc(l.card||l.lender||'')}</small></div><div class="r">${fmt(l.monthly)}<small class="note">/月 →</small></div></div>`}
 function vFixed(){
-  const st=fxStats(), t=today(), m=t.slice(0,7), ev=fxEvents(m), nextM=addMonths(m+'-01',1).slice(0,7);
-  const up=[...ev,...fxEvents(nextM)].filter(e=>e.d>=t), nxt=up[0];
+  const st=fxStats(), t=today(), m=t.slice(0,7), allEv=fxEvents(m), nextM=addMonths(m+'-01',1).slice(0,7);
+  const ev=allEv.filter(fxKeep);
+  const up=[...allEv,...fxEvents(nextM)].filter(e=>e.d>=t&&fxKeep(e)), nxt=up[0];
   const dim=new Date(Date.UTC(+m.slice(0,4),+m.slice(5,7),0)).getUTCDate();
   const byDay={};ev.forEach(e=>(byDay[e.d]=byDay[e.d]||[]).push(e));
   const strip=[...Array(dim)].map((_,i)=>{const d=m+'-'+String(i+1).padStart(2,'0'),L=byDay[d]||[],s=L.reduce((a,e)=>a+n(e.amt),0);
     return `<button class="cday${d===t?' today':''}${d<t?' past':''}${L.length?' has':''}${fxDay===d?' sel':''}" onclick="fxDay=fxDay==='${d}'?'':'${d}';rerender(1)"><b>${i+1}</b><i>${L.length?(L.length>3?'●●●':'●'.repeat(L.length)):''}</i><small>${s?fmt0(s).replace('$',''):''}</small></button>`}).join('');
   const sel=fxDay&&fxDay.startsWith(m)?(byDay[fxDay]||[]):null;
   const dayList=sel?`<div class="sub" style="margin-top:6px"><b>${fxDay}</b>：${sel.length?sel.map(e=>`${e.icon} ${esc(e.name)} ${e.amt!=null?fmt0(e.amt):'金額未知'}`).join('、'):'冇扣數'}</div>`:'';
-  const tl=up.filter(e=>dayDiff(t,e.d)<=31).slice(0,12);
+  const tl=up.filter(e=>dayDiff(t,e.d)<=31);
+  const filt=FX_FILT.map(([k,lab])=>`<button class="${fxFilter===k?'on':''}" onclick="fxFilter='${k}';rerender(1)">${lab}</button>`).join('');
   const R=st.R, adult=R.filter(rcAdult), normal=R.filter(r=>!rcAdult(r));
   const shown=normal.filter(r=>fxShowOff||r.status!=='已取消'&&r.status!=='可能已停'), offN=normal.length-normal.filter(r=>r.status!=='已取消'&&r.status!=='可能已停').length;
   const grp=(title,L,open=true)=>{if(!L.length)return '';const s=L.reduce((a,r)=>a+rcMonthly(r),0);
@@ -579,17 +583,21 @@ function vFixed(){
   const A=activeLoans().slice().sort((a,b)=>(loanNext(a)||'9').localeCompare(loanNext(b)||'9'));
   const aOn=adult.filter(rcCounted), aAmt=aOn.reduce((s,r)=>s+rcMonthly(r),0);
   const draws=Math.round(st.subs/ICHIBAN);
+  const lifeN=ev.length, lifeSum=ev.reduce((s,e)=>s+n(e.amt),0);
   return `<div class="card hero fx">
     <h2>📌 每月固定開支合計</h2><div class="big">${fmt0(st.total)}<span class="sub"> /月</span></div>
     <div class="fxsplit"><div onclick="tab='loan';history.replaceState(null,'','#loan');rerender()"><small>💸 貸款／分期 →</small><b>${fmt0(st.loans)}</b></div><div><small>📺 其他固定支出</small><b>${fmt0(st.other)}</b></div><div><small>一年合計</small><b>${fmt0(st.total*12)}</b></div></div>
     <div class="bar fxbar"><i style="width:${st.total?(st.loans/st.total*100).toFixed(1):0}%"></i></div>
-    ${nxt?`<div class="next">⏭️ 下一筆扣數：<b>${esc(nxt.name)}</b> ${nxt.amt!=null?fmt(nxt.amt):'金額未知'} · ${nxt.d}（${whenTxt(nxt.d)}）</div>`:''}
+    ${nxt?`<div class="next">⏭️ 下一筆${fxFilter==='life'?'生活固定':fxFilter==='loan'?'貸款':''}：<b>${esc(nxt.name)}</b> ${nxt.amt!=null?fmt(nxt.amt):'金額未知'} · ${nxt.d}（${whenTxt(nxt.d)}）</div>`:''}
     ${st.subs?`<div class="hquip">🎰 每月訂閱食咗你 ${fmt0(st.subs)}，等於 ${draws} 抽一番賞（一抽當 $${ICHIBAN}）；一年 ${fmt0(st.subs*12)}</div>`:''}
     ${st.pend.length?`<div class="sub">❓ 未計入：${st.pend.length} 項待確認／搵唔到紀錄${st.pendAmt?`（估計約 ${fmt0(st.pendAmt)}/月）`:''}，喺下面逐項補返。</div>`:''}
   </div>
-  <div class="card"><h2>🗓️ ${m.slice(0,4)} 年 ${+m.slice(5,7)} 月扣數日曆</h2><div class="cstrip">${strip}</div>${dayList}
-    <div class="sub">本月合共 ${ev.length} 筆 · ${fmt0(ev.reduce((s,e)=>s+n(e.amt),0))}（撳日子睇明細）</div></div>
-  <div class="card"><h2>⏳ 下次扣數（未來 31 日）</h2>${tl.length?tl.map(e=>`<div class="row tl"><div class="l"><span class="tld">${e.d.slice(5)}</span>${e.icon} ${esc(e.name)}<small class="note">${whenTxt(e.d)}</small></div><div class="r">${e.amt!=null?fmt(e.amt):'金額未知'}</div></div>`).join(''):'<div class="sub">未來一個月冇已知扣數</div>'}</div>
+  <div class="card"><h2>🗓️ ${m.slice(0,4)} 年 ${+m.slice(5,7)} 月扣數日曆</h2>
+    <div class="chips">${filt}</div>
+    <div class="sub" style="margin:0 0 6px">${fxFilter==='life'?'顯示訂閱、水電、電話、保險、泊車、家用等（唔包貸款分期）':fxFilter==='loan'?'只顯示貸款／分期月供':'生活固定 + 貸款分期'}</div>
+    <div class="cstrip">${strip}</div>${dayList}
+    <div class="sub">本月合共 ${lifeN} 筆 · ${fmt0(lifeSum)}（撳日子睇明細）</div></div>
+  <div class="card"><h2>⏳ ${fxFilter==='life'?'生活固定時間軸':fxFilter==='loan'?'貸款分期時間軸':'扣數時間軸'}（未來 31 日）</h2>${tl.length?tl.map(e=>`<div class="row tl"><div class="l"><span class="tld">${e.d.slice(5)}</span>${e.icon} ${esc(e.name)}<small class="note">${whenTxt(e.d)}${e.kind&&!e.loan?' · '+esc(e.kind):''}</small></div><div class="r">${e.amt!=null?fmt(e.amt):'金額未知'}</div></div>`).join(''):`<div class="sub">${fxFilter==='life'?'未來一個月冇已知嘅訂閱／水電等扣數':'未來一個月冇已知扣數'}</div>`}</div>
   <div class="card"><h2>📺 訂閱</h2>${subGroups||'<div class="sub">未有訂閱紀錄。撳右下角 ＋ 加。</div>'}
     ${adult.length?`<details class="lgrp rc-private"><summary><span>🔒 私人 · ${adult.length} 項</span><span class="r">${fmt0(aAmt)}/月</span></summary><div class="sub">撳開先顯示名稱。</div>${adult.sort((a,b)=>(rcOn(b)-rcOn(a))||rcMonthly(b)-rcMonthly(a)).map(rcRow).join('')}</details>`:''}</div>
   <div class="card"><h2>🏠 其他固定支出</h2>${kindGroups||'<div class="sub">未有紀錄</div>'}</div>
@@ -597,7 +605,7 @@ function vFixed(){
     <details class="lgrp"><summary><span>${A.length} 條進行中</span><span class="r">${fmt0(st.loans)}/月</span></summary>${A.map(loanFxRow).join('')||'<div class="sub">冇進行中嘅貸款</div>'}</details>
     <div class="sub">撳任何一條跳去 💸 貸款 tab 改期數。循環卡數冇固定月供，唔計入。</div></div>
   <div class="actions">${offN?`<button onclick="fxShowOff=!fxShowOff;rerender(1)">${fxShowOff?'收埋':'顯示'}已停／已取消（${offN}）</button>`:''}<button onclick="editRc()">＋ 新增固定支出</button></div>
-  <div class="sub tip">📌 每月合計只計「生效中／試用中」而有金額嘅項目；年費÷12、每週×52÷12。貸款／分期直接用 💸 貸款 tab（同總覽「每月分期負擔」一樣），呢度唔會再存一次，所以唔會重複計。</div>
+  <div class="sub tip">📌 每月合計只計「生效中／試用中」而有金額嘅項目；年費÷12、每週×52÷12。貸款／分期直接用 💸 貸款 tab（同總覽「每月分期負擔」一樣），呢度唔會再存一次，所以唔會重複計。日曆預設「生活固定」：訂閱、水電、電話、保險、泊車、家用；要睇貸款撳上面「貸款分期」。</div>
   <button class="fab" onclick="editRc()">＋</button>`}
 function cancelRc(id){const r=S.recurring.find(x=>x.id===id);if(!r||!confirm(`標記「${rcAdult(r)?'呢個私人項目':r.name}」為已取消？（只係改紀錄，唔會幫你取消訂閱）`))return;
   r.status='已取消';r.cancelledAt=today();r.updatedAt=stamp(r.updatedAt);Sync.queue('recurring',r);save();rerender(1);toast('已標記為已取消 ✂️ 每月慳返 '+fmt0(n(+r.hkd)*rcPerMonth(r)))}
