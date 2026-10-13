@@ -144,3 +144,11 @@ details summary{cursor:pointer;padding:6px 0}
 .cday.past{opacity:.45}.cday.has{border-color:var(--pri)}.cday.today{background:var(--pri);color:#fff;border-color:var(--pri)}.cday.today i,.cday.today small{color:#fff}.cday.sel{outline:2px solid var(--amber)}
 .tl .tld{display:inline-block;min-width:3.2em;color:var(--mute);font-variant-numeric:tabular-nums}
 .rc-private>summary{color:var(--mute)}
+
+/* ---------- 總覽家底／儲備警告 ---------- */
+.hero-home{background:linear-gradient(160deg,#e9f7f1 0%,var(--card) 55%)}
+@media (prefers-color-scheme:dark){.hero-home{background:linear-gradient(160deg,#183229 0%,var(--card) 60%)}}
+.big-xl{font-size:35px;line-height:1.15}
+.warn-amber{background:#fff6dd;color:#5d4300;border-radius:10px;padding:10px 12px;font-size:14px;margin:0 0 12px}
+@media (prefers-color-scheme:dark){.warn-amber{background:#3a3115;color:#ffe08a}}
+#reserveBanner.reserve-bar{position:sticky;top:calc(env(safe-area-inset-top) + 48px);z-index:4;margin:0 0 10px;border-radius:0;padding:8px 14px;font-size:13px}

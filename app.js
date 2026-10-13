@@ -75,6 +75,38 @@ function normalize(){
 const cards=()=>live(S.accounts).filter(a=>a.stmtBal!=null);
 const exposure=a=>a.totalAcct!=null?a.totalAcct:n(a.stmtBal)+n(a.unposted);
 const afterPay=a=>exposure(a)-n(a.paidAfterStmt);
+const acctById=id=>live(S.accounts).find(a=>a.id===id);
+/* 卡 Live 結欠：優先 App／銀行 balance（負數＝多付／surplus）；冇數字就退回 afterPay */
+const cardLiveBal=a=>typeof a.balance==='number'&&isFinite(a.balance)?a.balance:afterPay(a);
+/* 流動儲備：優先 hsbc-one+hsbc-savings，否則 bank，否則所有銀行／現金／信封／儲備（唔計卡） */
+const cashAccts=()=>{const A=live(S.accounts);const pref=A.filter(a=>a.id==='hsbc-one'||a.id==='hsbc-savings');
+  if(pref.length)return pref;const bank=A.filter(a=>a.id==='bank');if(bank.length)return bank;
+  return A.filter(a=>a.stmtBal==null&&/銀行|現金|信封|儲備/.test(a.type||''))};
+const cashReserve=()=>cashAccts().reduce((s,a)=>s+n(a.balance),0);
+const hasCashTrack=()=>cashAccts().length>0;
+/* 儲備安全線：預設 max(10000, 約一個月固定支出)；localStorage hhledger.reserveFloor 可覆寫 */
+const reserveFloor=()=>{const o=localStorage.getItem('hhledger.reserveFloor');if(o!=null&&o!==''&&!isNaN(+o))return Math.max(0,+o);
+  let t=0;try{t=n(fxStats().total)}catch(_){}return Math.max(10000,Math.round(t))};
+const reserveWarnFloor=()=>reserveFloor()*2;
+const fmtBal=x=>{if(x==null||x===''||isNaN(x))return{txt:'—',cls:''};if(x<0)return{txt:'多付 '+fmt(-x),cls:'pos'};if(x>0)return{txt:'結欠 '+fmt(x),cls:'neg'};return{txt:'結清 ✓',cls:'pos'}};
+const coverQuip=(cash,netCard)=>{if(netCard<=0)return'卡數多付中，做得好 💪';if(cash>=reserveWarnFloor())return'家底穩陣，繼續保持 ✨';if(cash>=reserveFloor())return'儲備仲夠，留意使錢節奏 👀';return'流動儲備偏低，出街使錢前睇清楚 ⚠️'};
+function reserveStatusHtml(){if(!hasCashTrack())return'';const cash=cashReserve(),floor=reserveFloor(),warn=reserveWarnFloor();
+  if(cash<floor)return`<div class="warn">⚠️ 流動儲備約 ${fmt0(cash)}，低過安全線 ${fmt0(floor)} — 出街使錢前睇清楚</div>`;
+  if(cash<warn)return`<div class="warn-amber">💡 流動儲備約 ${fmt0(cash)}，接近安全線 ${fmt0(floor)}（警戒線 ${fmt0(warn)}）</div>`;
+  return''}
+function updateReserveBanner(){const el=$('#reserveBanner');if(!el)return;if(!S||tab==='overview'||!hasCashTrack()){el.hidden=true;el.textContent='';el.className='';return}
+  const cash=cashReserve(),floor=reserveFloor(),warn=reserveWarnFloor();
+  if(cash<floor){el.hidden=false;el.className='warn reserve-bar';el.textContent=`⚠️ 流動儲備約 ${fmt0(cash)}，低過安全線 ${fmt0(floor)} — 出街使錢前睇清楚`}
+  else if(cash<warn){el.hidden=false;el.className='warn-amber reserve-bar';el.textContent=`💡 流動儲備約 ${fmt0(cash)}，接近安全線 ${fmt0(floor)}`}
+  else{el.hidden=true;el.textContent='';el.className=''}}
+function checkReserveNotify(){if(!S||!hasCashTrack())return;const cash=cashReserve(),floor=reserveFloor();if(!(cash<floor))return;
+  const msg=`流動儲備約 ${fmt0(cash)}，低過安全線 ${fmt0(floor)} — 出街使錢前睇清楚`,key='hhledger.reserveNotify',d=today();
+  if(localStorage.getItem(key)===d)return;try{localStorage.setItem(key,d)}catch(_){}
+  toast('⚠️ '+msg,4000);
+  if(typeof Notification==='undefined')return;
+  const fire=()=>{try{new Notification('家計簿',{body:msg,tag:'hhledger-reserve'})}catch(_){}};
+  if(Notification.permission==='granted')fire();
+  else if(Notification.permission!=='denied')Notification.requestPermission().then(p=>{if(p==='granted')fire()}).catch(()=>{})}
 const burdenList=()=>live(S.installments).filter(i=>i.countInBurden&&!/已完/.test(i.status||''));
 /* 每月分期負擔：有貸款 tab 資料就以貸款為準（唔會同分期 tab 重複計） */
 const burden=()=>loanMode()?activeLoans().reduce((s,l)=>s+n(l.monthly),0):burdenList().reduce((s,i)=>s+n(i.monthly),0);
@@ -95,8 +127,10 @@ function render(){
   $('#title').textContent=TITLES[tab];
   document.querySelectorAll('.tabs button').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));
   $('#view').innerHTML=({overview:vOverview,tx:vTx,accounts:vAccounts,inst:vInst,loan:vLoan,fixed:vFixed,wish:vWish,pay:vPay})[tab]();
+  updateReserveBanner();
   Sync.badge();
   if(tab==='loan')loanAnimate();
+  checkReserveNotify();
 }
 function rerender(keepScroll){const y=window.scrollY;render();window.scrollTo(0,keepScroll?y:0)}
 
@@ -108,20 +142,40 @@ function vOverview(){
   const warns=cs.filter(a=>a.dueDate&&a.dueDate<today()&&n(a.paidAfterStmt)<n(a.minPay))
     .map(a=>`⚠️ ${esc(a.name)}：到期日 ${a.dueDate} 已過，月結單後只還 ${fmt0(a.paidAfterStmt)}，低過最低還款 ${fmt(a.minPay)}（差 ${fmt(n(a.minPay)-n(a.paidAfterStmt))}）。`);
   const soon=cs.filter(a=>a.dueDate&&a.dueDate>=today()).map(a=>`${esc(a.name)} 到期 ${a.dueDate}（最低 ${fmt(a.minPay)}，已還 ${fmt0(a.paidAfterStmt)}）`);
+  const cash=cashReserve(), netCard=cs.reduce((s,a)=>s+cardLiveBal(a),0), fbNet=fmtBal(netCard);
+  const asOfs=live(S.accounts).map(a=>a.asOf||a.stmtDate).filter(Boolean).sort().reverse();
+  const asOf=asOfs[0]||'', floor=reserveFloor();
+  const cashCls=cash<floor?'neg':cash<reserveWarnFloor()?'':'pos';
+  const cardRows=cs.map(a=>{const fb=fmtBal(cardLiveBal(a));
+    return `<div class="row"><div class="l">${esc(a.name)}<small class="note">月結單 ${esc(a.stmtDate||'—')} 已還 ${fmt0(a.paidAfterStmt)}／原結欠 ${fmt(a.stmtBal)}</small></div><div class="r ${fb.cls}">${fb.txt}</div></div>`}).join('');
   return `
   ${warns.map(w=>`<div class="warn">${w}</div>`).join('')}
+  ${reserveStatusHtml()}
+  <div class="card hero-home">
+    <h2>而家嘅家底</h2>
+    <div class="big big-xl ${cashCls||'pos'}">${fmt0(cash)}</div>
+    <div class="sub">${asOf?'截至 '+esc(asOf)+' · ':''}${esc(coverQuip(cash,netCard))}</div>
+    <div class="grid2" style="margin-top:10px">
+      <div><small class="note">卡數現況（Live）</small><div class="big ${fbNet.cls}">${fbNet.txt}</div></div>
+      <div><small class="note">流動儲備</small><div class="big ${cashCls||'pos'}">${fmt0(cash)}</div></div>
+    </div>
+  </div>
+  <div class="card"><h2>信用卡 Live</h2>
+    ${cardRows||'<div class="sub">未有信用卡帳戶</div>'}
+    ${soon.length?`<div class="sub" style="margin-top:6px">📅 ${soon.join('<br>📅 ')}</div>`:''}
+  </div>
+  <details class="card"><summary><b>月結單參考（唔再放封面）</b></summary>
+    <div class="sub" style="margin:6px 0">歷史月結單加總（含未入帳分期）— 已還清嘅結單唔再當而家欠數</div>
+    <div class="big neg">${fmt0(exp)}</div>
+    <div class="sub">扣月結單後還款 ≈ <b>${fmt0(aft)}</b>（未計新簽帳及利息，只係估算）</div>
+    ${cs.map(a=>`<div class="row"><div class="l">${esc(a.name)}<small class="note">結欠 ${fmt(a.stmtBal)} + 未入帳分期 ${fmt(a.unposted)}${a.totalAcct!=null?'（Total Acct '+fmt(a.totalAcct)+'）':''} · 已還 ${fmt0(a.paidAfterStmt)}</small></div><div class="r">${fmt0(exposure(a))}<small class="note">→ ${fmt0(afterPay(a))}</small></div></div>`).join('')}
+  </details>
   <div class="month"><span class="sub">月份</span><input type="month" value="${ovMonth}" onchange="ovMonth=this.value;render()"></div>
   <div class="grid2">
     <div class="card"><h2>本月支出</h2><div class="big">${fmt0(spend)}</div><div class="sub">${mt.length} 筆 · 收入 ${fmt0(inc)}</div></div>
     <div class="card"${loanMode()?` onclick="tab='loan';render()"`:''}><h2>每月分期負擔</h2><div class="big">${fmt0(burden())}</div><div class="sub">${burdenParts().map(([k,v])=>esc(k)+' '+fmt0(v)).join(' · ')}${loanMode()&&loanStats().last?`<br>🏁 還清日 ${ym(loanStats().last)} →`:''}</div></div>
   </div>
   ${live(S.recurring).length?(()=>{const f=fxStats();return `<div class="card" onclick="tab='fixed';history.replaceState(null,'','#fixed');render()"><h2>📌 每月固定支出</h2><div class="big">${fmt0(f.total)}</div><div class="sub">💸 貸款／分期 ${fmt0(f.loans)} + 📺 其他 ${fmt0(f.other)}（訂閱 ${fmt0(f.subs)}）→</div></div>`})():''}
-  <div class="card"><h2>Citi + HSBC 卡數總額（月結單日，含未入帳分期）</h2>
-    <div class="big neg">${fmt0(exp)}</div>
-    <div class="sub">扣月結單後還款 ≈ <b>${fmt0(aft)}</b>（未計新簽帳及利息，只係估算）</div>
-    ${cs.map(a=>`<div class="row"><div class="l">${esc(a.name)}<small class="note">結欠 ${fmt(a.stmtBal)} + 未入帳分期 ${fmt(a.unposted)}${a.totalAcct!=null?'（Total Acct '+fmt(a.totalAcct)+'）':''} · 已還 ${fmt0(a.paidAfterStmt)}</small></div><div class="r">${fmt0(exposure(a))}<small class="note">→ ${fmt0(afterPay(a))}</small></div></div>`).join('')}
-    ${soon.length?`<div class="sub" style="margin-top:6px">📅 ${soon.join('<br>📅 ')}</div>`:''}
-  </div>
   <div class="grid2">
     <div class="card"><h2>partner 應收</h2><div class="big pos">${fmt0(receivable())}</div><div class="sub">代付待收</div></div>
     <div class="card"><h2>已付訂金（未到貨）</h2><div class="big">${fmt0(depositsHeld())}</div><div class="sub">訂金已付、尾數未找</div></div>
@@ -129,6 +183,7 @@ function vOverview(){
   <div class="card"><h2>本月分類支出</h2>${Object.keys(byCat).length?Object.entries(byCat).sort((a,b)=>b[1]-a[1]).map(([c,v])=>`<div class="row"><div class="l">${esc(c)}</div><div class="r">${fmt(v)}</div></div>`).join(''):'<div class="sub">本月未有支出紀錄 — 去「記帳」加一筆。</div>'}</div>
   ${vYear()}`;
 }
+
 function vYear(){
   const all=live(S.transactions); const years=[...new Set(all.map(t=>(t.date||'').slice(0,4)).filter(Boolean))].sort().reverse();
   if(!years.length) return '';
@@ -167,13 +222,15 @@ function vAccounts(){
     const isCard=a.stmtBal!=null;
     const bal=a.id==='recv'?receivable():a.balance;
     return `<div class="card" onclick="editAcct('${esc(a.id)}')"><h2>${esc(a.name)} <span class="pill">${esc(a.type)}</span>${a.hist?' <span class="pill">舊檔</span>':''}</h2>
-    ${isCard?`<div class="big neg">${fmt(exposure(a))}</div>
+    ${isCard?(()=>{const lb=cardLiveBal(a),fb=fmtBal(lb);
+      const used=a.creditLimit!=null&&typeof a.availableCredit==='number'?Math.max(0,(a.creditLimit-n(a.availableCredit))/a.creditLimit):a.creditLimit?Math.max(0,lb)/a.creditLimit:null;
+      return `<div class="big ${fb.cls}">${fb.txt}</div>
       <div class="row"><div class="l">月結單結欠（${a.stmtDate}）</div><div class="r">${fmt(a.stmtBal)}</div></div>
       <div class="row"><div class="l">未入帳分期</div><div class="r">${fmt(a.unposted)}</div></div>
       <div class="row"><div class="l">最低還款 · 到期 ${a.dueDate}</div><div class="r">${fmt(a.minPay)}</div></div>
       <div class="row"><div class="l">月結單後已還</div><div class="r">${fmt(a.paidAfterStmt)} ${n(a.paidAfterStmt)<n(a.minPay)?'<span class="pill red">低過最低</span>':'<span class="pill ok">已達最低</span>'}</div></div>
       <div class="row"><div class="l">估算餘額（扣已還）</div><div class="r"><b>${fmt(afterPay(a))}</b></div></div>
-      ${a.creditLimit?`<div class="sub">信用額 ${fmt0(a.creditLimit)} · 使用率 ${(exposure(a)/a.creditLimit*100).toFixed(0)}%</div><div class="bar"><i style="width:${Math.min(100,exposure(a)/a.creditLimit*100)}%"></i></div>`:''}`
+      ${a.creditLimit?`<div class="sub">信用額 ${fmt0(a.creditLimit)} · 使用率 ${used!=null?(used*100).toFixed(0):'—'}%</div><div class="bar"><i style="width:${Math.min(100,(used||0)*100)}%"></i></div>`:''}`})()
     :`<div class="big">${a.hist&&a.balance==null?'—':fmt(bal)}</div>${a.asOf?`<div class="sub">截至 ${a.asOf}</div>`:''}`}
     ${a.notes?`<small class="note">${esc(a.notes)}</small>`:''}</div>`}).join('')+
     `<div class="actions"><button onclick="editAcct()">＋ 新增帳戶</button></div>`;
@@ -447,9 +504,9 @@ function vLoan(){
   <div class="card"><div class="chips">${[['end','⏳ 最快完'],['rate','🔥 利率最貴'],['amt','💰 餘額最大']].map(([k,t])=>`<button class="${loanSort===k?'on':''}" onclick="loanSort='${k}';rerender(1)">${t}</button>`).join('')}
     <button class="${loanGroup?'on':''}" onclick="loanGroup=!loanGroup;rerender(1)">🗂️ 按銀行分組</button></div>
     ${list||'<div class="sub">冇進行中嘅貸款 🎉</div>'}</div>
-  ${rev.length?`<div class="card boss"><h2>👹 大魔王：循環卡數（冇固定期數，唔計入還清日同每月供款）</h2>${rev.map(l=>{const a=l.acctId&&live(S.accounts).find(x=>x.id===l.acctId);const bal=a&&a.stmtBal!=null?a.stmtBal:l.balance;const asOf=a&&a.stmtDate?a.stmtDate:l.balanceAsOf;
-      return `<div class="loan" onclick="editLoan('${esc(l.id)}')"><div class="lh"><span class="li">👹</span><div class="lt"><b>${esc(l.name)}</b><small>結欠 ${bal!=null?fmt(bal):unk}${asOf?'（月結單 '+esc(asOf)+'）':''}${l.minPay!=null?' · 最低還款 '+fmt(l.minPay):''}</small></div></div>
-        <div class="lfoot">${rateBadge(l)}</div><div class="quip">${lApr(l)!=null&&st.avgApr?`年利率 ${n(l.rate)}%，大約係你啲分期平均（${st.avgApr.toFixed(1)}%）嘅 ${Math.round(lApr(l)/st.avgApr)} 倍 — 有閒錢應該先打呢隻大佬`:'利息最貴，有閒錢先打佢'}</div>${l.notes?`<small class="note">${esc(l.notes)}</small>`:''}</div>`}).join('')}</div>`:''}
+  ${rev.length?`<div class="card boss"><h2>👹 大魔王：循環卡數（冇固定期數，唔計入還清日同每月供款）</h2>${rev.map(l=>{const a=l.acctId&&acctById(l.acctId);const bal=a&&typeof a.balance==='number'&&isFinite(a.balance)?a.balance:l.balance;const asOf=a&&a.asOf?a.asOf:(a&&a.stmtDate?a.stmtDate:l.balanceAsOf);const ok=bal!=null&&bal<=0;
+      return `<div class="loan" onclick="editLoan('${esc(l.id)}')"><div class="lh"><span class="li">${ok?'🎉':'👹'}</span><div class="lt"><b>${esc(l.name)}</b><small>${ok?'現時多付／結清':'現時結欠'} ${bal!=null?fmt(Math.abs(bal))+(bal<0?'（多付）':''):unk}${asOf?'（截至 '+esc(asOf)+'）':''}${l.minPay!=null?' · 最低還款 '+fmt(l.minPay):''}</small></div></div>
+        <div class="lfoot">${rateBadge(l)}</div><div class="quip">${ok?'卡數已多付／結清，唔使再驚大佬 🎉':(lApr(l)!=null&&st.avgApr?`年利率 ${n(l.rate)}%，大約係你啲分期平均（${st.avgApr.toFixed(1)}%）嘅 ${Math.round(lApr(l)/st.avgApr)} 倍 — 有閒錢應該先打呢隻大佬`:'利息最貴，有閒錢先打佢')}</div>${l.notes?`<small class="note">${esc(l.notes)}</small>`:''}</div>`}).join('')}</div>`:''}
   ${pend.length?`<div class="card"><h2>❓ 待確認</h2>${pend.map(l=>`<div class="loan" onclick="editLoan('${esc(l.id)}')"><div class="lh"><span class="li">${LOAN_ICON[l.type]||'💸'}</span><div class="lt"><b>${esc(l.name)}</b><small>${l.balance!=null?'舊檔餘額 '+fmt0(l.balance)+(l.balanceAsOf?'（'+esc(l.balanceAsOf)+'）':''):'餘額 未知（補返）'} · 每月 ${l.monthly!=null?fmt(l.monthly):'未知（補返）'}</small></div></div><small class="note">${esc(l.notes||'')}</small></div>`).join('')}</div>`:''}
   ${grads.length?`<details class="card"><summary><b>🎓 畢業生（${grads.length}）</b></summary>${grads.map(loanCard).join('')}</details>`:''}
   <div class="sub tip">📌 呢頁係<b>現行貸款嘅正本</b>：總覽嘅「每月分期負擔」用呢度計。🗓️ 分期 tab 嘅月結單合計同舊檔逐條明細只作參考（已連結 🔗），唔會重複計。「估算」= 由月結單數字推算，唔係銀行報價。</div>
@@ -862,6 +919,10 @@ function settings(){
   <button type="button" id="rstBtn" style="color:var(--warn)">↺ 重設為種子資料（會清走本機改動）</button>
   <div class="sub">資料存喺呢部機嘅瀏覽器。換機／清瀏覽器資料前記得匯出。<br>種子：${esc(S.source||'')} · ${esc(S.generatedAt||'')}<br>
   共 ${live(S.transactions).length} 筆交易${S.historyImport?'（包括舊檔 '+S.historyImport.tx+' 筆，'+esc(S.historyImport.range)+'）':''}${storageNote?'<br>'+esc(storageNote):''}</div>
+  <h3 style="margin:8px 0 0">儲備安全線</h3>
+  <label>流動儲備安全線（HKD）<input id="rFloor" type="number" min="0" step="1000" value="${reserveFloor()}" placeholder="預設 max(10000, 每月固定)"></label>
+  <div class="sub">低過呢條線會喺各頁顯示警告，同每日最多一次通知。清空再儲存＝用預設（約一個月固定支出，下限 $10,000）。而家預設計出：${fmt0(Math.max(10000,Math.round((()=>{try{return n(fxStats().total)}catch(_){return 0}})())))}。</div>
+  <button type="button" id="rFloorSave">💾 儲存儲備安全線</button>
   <h3 style="margin:8px 0 0">☁︎ 雲端同步（Google Sheets）</h3>
   <label>同步網址（Apps Script /exec）<input id="syUrl" type="url" placeholder="https://script.google.com/macros/s/…/exec" value="${esc(c.url||'')}"></label>
   <label>密碼（token）<input id="syTok" type="password" autocomplete="off" value="${esc(c.token||'')}"></label>
@@ -877,6 +938,10 @@ function settings(){
     const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download=`家計簿備份_${today()}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),2000)};
   $('#impBtn').onclick=()=>$('#importFile').click();
   $('#rstBtn').onclick=async()=>{if(confirm('確定重設？本機改動會消失（建議先匯出）')){localStorage.removeItem(KEY);localStorage.removeItem(IDB_FLAG);S=null;dlg.close();await load()}};
+  $('#rFloorSave').onclick=()=>{const v=$('#rFloor').value.trim();
+    if(v===''||isNaN(+v)){try{localStorage.removeItem('hhledger.reserveFloor')}catch(_){}toast('已重設為預設安全線（約一個月固定支出，下限 $10,000）')}
+    else{lsSet('hhledger.reserveFloor',String(Math.max(0,Math.round(+v))));toast('已儲存儲備安全線 '+fmt0(+v))}
+    updateReserveBanner();checkReserveNotify()};
   const saveCfg=()=>{const url=$('#syUrl').value.trim(),token=$('#syTok').value.trim(),c=Sync.cfg();
     // 網址／密碼有改先重新全量同步；唔係每次撳「立即同步」都下載晒成個資料庫
     Sync.setCfg(url!==c.url||token!==c.token?{url,token,serverTime:'',serverVersion:0}:{url,token});return !!(url&&token)};
