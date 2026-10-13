@@ -2,13 +2,16 @@
 const KEY='hhledger.v1', SYNC_KEY='hhledger.sync', SYNCQ_KEY='hhledger.syncq';
 const TX_TYPES=['支出','收入','轉帳','分期還款'];
 const WISH_ST=['想買','已訂','已付訂金','已買','訂咗等拎'];
-/* 常用店舖（Wishlist 下拉；「其他」可自由輸入並記住） */
-const DEFAULT_STORES=['孤注一扭','FROM JAPAN','ONEMAP','Buyee','AMAZON','L Model','淘寶傲峰','玩具迷城','精品','香港玩具所','HOBBY LAND','Premium Bandai','AmiAmi','Carousell','Buy and Ship','港魂','爆米玩具','Mandarake'];
+/* 常用店舖／商戶（Wishlist 店舖、記帳對方／商戶、固定支出帳單商戶；「其他」可自由輸入並記住） */
+const DEFAULT_STORES=['孤注一扭','FROM JAPAN','ONEMAP','Buyee','AMAZON','L Model','淘寶傲峰','玩具迷城','精品','香港玩具所','HOBBY LAND','Premium Bandai','AmiAmi','Carousell','Buy and Ship','港魂','爆米玩具','Mandarake','HKTVmall','Keeta','foodpanda','Uber Eats','PayPal','Apple','Google','YouTube','SmarTone','CMHK','HKBN','WSD','Prudential','停車場','Mum'];
 const OTHER_STORE='其他';
 function shopOpts(){
-  const fromWish=[...new Set(live(S.wishlist||[]).map(w=>String(w.store||'').trim()).filter(Boolean))];
-  const extra=(S.shops||[]).map(x=>String(x||'').trim()).filter(Boolean);
-  return [...new Set([...DEFAULT_STORES,...extra,...fromWish])].sort((a,b)=>a.localeCompare(b,'zh-HK'));
+  const pick=xs=>[...new Set((xs||[]).map(x=>String(x||'').trim()).filter(Boolean))];
+  const fromWish=pick(live(S.wishlist||[]).map(w=>w.store));
+  const fromTx=pick(live(S.transactions||[]).map(t=>t.counterparty));
+  const fromRc=pick(live(S.recurring||[]).map(r=>r.merchant));
+  const extra=pick(S.shops);
+  return [...new Set([...DEFAULT_STORES,...extra,...fromWish,...fromTx,...fromRc])].sort((a,b)=>a.localeCompare(b,'zh-HK'));
 }
 function rememberShop(name){
   name=String(name||'').trim();
@@ -338,10 +341,10 @@ function form(title,fields,obj,onSave,onDel){
       const useOther=val!==''&&val!=null&&!inList;
       const sel=useOther?OTHER_STORE:(inList?val:'');
       inp=`<select name="${d.k}" data-other="${d.k}__custom" onchange="toggleStoreOther(this)">`+
-        `<option value="">（揀店舖）</option>`+
+        `<option value="">（揀店舖／商戶）</option>`+
         opts.map(o=>`<option value="${esc(o)}" ${o===sel?'selected':''}>${esc(o)}</option>`).join('')+
         `<option value="${OTHER_STORE}" ${useOther?'selected':''}>${OTHER_STORE}</option></select>`+
-        `<input name="${d.k}__custom" type="text" placeholder="輸入自訂店名" value="${useOther?esc(val):''}" ${useOther?'':'hidden'} style="margin-top:6px">`;
+        `<input name="${d.k}__custom" type="text" placeholder="輸入自訂店舖／商戶名" value="${useOther?esc(val):''}" ${useOther?'':'hidden'} style="margin-top:6px">`;
     }else if(d.opts) inp=`<select name="${d.k}">${[...new Set([...(d.opts),...(val&&!d.opts.includes(val)?[val]:[])])].map(o=>`<option ${o==val?'selected':''}>${esc(o)}</option>`).join('')}</select>`;
     else if(d.t==='area') inp=`<textarea name="${d.k}" rows="2">${esc(val)}</textarea>`;
     else if(d.t==='check') inp=`<input type="checkbox" name="${d.k}" ${val?'checked':''} style="width:auto">`;
@@ -374,7 +377,7 @@ function editTx(id){
   form(id?'修改紀錄':'記一筆',[
     {k:'date',l:'日期',t:'date',req:1},{k:'type',l:'類型',opts:TX_TYPES},{k:'amount',l:'金額（HKD）',t:'number',req:1},
     {k:'category',l:'分類',opts:S.categories},{k:'sub',l:'細項'},{k:'account',l:'帳戶',opts:acctNames()},
-    {k:'desc',l:'描述'},{k:'counterparty',l:'對方／商戶'},{k:'tag',l:'標籤'},{k:'notes',l:'備註',t:'area'}],
+    {k:'desc',l:'描述'},{k:'counterparty',l:'對方／商戶',opts:shopOpts(),other:1},{k:'tag',l:'標籤'},{k:'notes',l:'備註',t:'area'}],
     t,o=>{if(o.dm&&o.date&&!o.date.endsWith('-01'))delete o.dm;upsertLocal('transactions',o,!id)},id?()=>tombstone('transactions',id):null);
 }
 function editAcct(id){
@@ -705,7 +708,7 @@ function editRc(id){
     {k:'name',l:'名稱',req:1},{k:'kind',l:'種類',opts:RC_KINDS},{k:'category',l:'訂閱分類（只限訂閱）',opts:['',...RC_CATS]},
     {k:'hkd',l:'每次扣數（HKD）',t:'number'},{k:'amount',l:'原幣金額',t:'number'},{k:'currency',l:'貨幣（HKD／USD／JPY…）'},
     {k:'cycle',l:'週期',opts:RC_CYCLES},{k:'day',l:'每月扣數日（幾號）',t:'number'},{k:'account',l:'卡／帳戶',opts:['',...acctNames(),'PayPal 餘額']},
-    {k:'merchant',l:'帳單商戶名'},{k:'lastDate',l:'上次扣數',t:'date'},{k:'nextDate',l:'下次扣數（留空自動計）',t:'date'},{k:'firstSeen',l:'第一次見',t:'date'},
+    {k:'merchant',l:'帳單商戶名',opts:shopOpts(),other:1},{k:'lastDate',l:'上次扣數',t:'date'},{k:'nextDate',l:'下次扣數（留空自動計）',t:'date'},{k:'firstSeen',l:'第一次見',t:'date'},
     {k:'status',l:'狀態',opts:RC_ST},{k:'flag',l:'提示（例如 重複？）'},{k:'est',l:'金額係估算',t:'check'},{k:'adult',l:'私人（收埋喺 🔒 分組）',t:'check'},
     {k:'evidence',l:'證據（交易／電郵）',t:'area'},{k:'txIds',l:'連結交易 id（逗號分隔）',t:'area'},{k:'notes',l:'備註',t:'area'}],
     r,o=>{if(o.status==='已取消'&&!o.cancelledAt)o.cancelledAt=today();upsertLocal('recurring',o,!id)},id?()=>tombstone('recurring',id):null);
