@@ -1,7 +1,28 @@
 'use strict';
 const KEY='hhledger.v1', SYNC_KEY='hhledger.sync', SYNCQ_KEY='hhledger.syncq';
 const TX_TYPES=['支出','收入','轉帳','分期還款'];
-const WISH_ST=['想買','已訂','已付訂金','已買'];
+const WISH_ST=['想買','已訂','已付訂金','已買','訂咗等拎'];
+/* 常用店舖（Wishlist 下拉；「其他」可自由輸入並記住） */
+const DEFAULT_STORES=['孤注一扭','FROM JAPAN','ONEMAP','Buyee','AMAZON','L Model','淘寶傲峰','玩具迷城','精品','香港玩具所','HOBBY LAND','Premium Bandai','AmiAmi','Carousell','Buy and Ship','港魂','爆米玩具','Mandarake'];
+const OTHER_STORE='其他';
+function shopOpts(){
+  const fromWish=[...new Set(live(S.wishlist||[]).map(w=>String(w.store||'').trim()).filter(Boolean))];
+  const extra=(S.shops||[]).map(x=>String(x||'').trim()).filter(Boolean);
+  return [...new Set([...DEFAULT_STORES,...extra,...fromWish])].sort((a,b)=>a.localeCompare(b,'zh-HK'));
+}
+function rememberShop(name){
+  name=String(name||'').trim();
+  if(!name||name===OTHER_STORE)return;
+  if(DEFAULT_STORES.includes(name))return;
+  if(!Array.isArray(S.shops))S.shops=[];
+  if(!S.shops.includes(name))S.shops.push(name);
+}
+window.toggleStoreOther=sel=>{
+  const custom=document.querySelector('[name="'+sel.dataset.other+'"]');
+  if(!custom)return;
+  if(sel.value===OTHER_STORE){custom.hidden=false;custom.required=!!sel.closest('label');custom.focus()}
+  else{custom.hidden=true;custom.required=false;custom.value=''}
+};
 let S=null, tab='overview', txMonth=null, wishFilter='全部', ovMonth=null, ovYear=null, txLimit=300, txQuery='', arKind='summary', arId='';
 const $=s=>document.querySelector(s);
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -67,7 +88,7 @@ async function load(){
   Sync.auto();
 }
 function normalize(){
-  ['accounts','transactions','installments','wishlist','categories','salary','forecast','bonus','archive','loans','recurring'].forEach(k=>{if(!Array.isArray(S[k]))S[k]=[]});
+  ['accounts','transactions','installments','wishlist','categories','salary','forecast','bonus','archive','loans','recurring','shops'].forEach(k=>{if(!Array.isArray(S[k]))S[k]=[]});
   if(!S.burden)S.burden={};
 }
 
@@ -311,7 +332,17 @@ function form(title,fields,obj,onSave,onDel){
   f.innerHTML=`<h3 style="margin:0">${esc(title)}</h3>`+fields.map(d=>{
     const val=obj[d.k]??'';
     let inp;
-    if(d.opts) inp=`<select name="${d.k}">${[...new Set([...(d.opts),...(val&&!d.opts.includes(val)?[val]:[])])].map(o=>`<option ${o==val?'selected':''}>${esc(o)}</option>`).join('')}</select>`;
+    if(d.opts&&d.other){
+      const opts=[...new Set((d.opts||[]).filter(Boolean))];
+      const inList=val!==''&&val!=null&&opts.includes(val);
+      const useOther=val!==''&&val!=null&&!inList;
+      const sel=useOther?OTHER_STORE:(inList?val:'');
+      inp=`<select name="${d.k}" data-other="${d.k}__custom" onchange="toggleStoreOther(this)">`+
+        `<option value="">（揀店舖）</option>`+
+        opts.map(o=>`<option value="${esc(o)}" ${o===sel?'selected':''}>${esc(o)}</option>`).join('')+
+        `<option value="${OTHER_STORE}" ${useOther?'selected':''}>${OTHER_STORE}</option></select>`+
+        `<input name="${d.k}__custom" type="text" placeholder="輸入自訂店名" value="${useOther?esc(val):''}" ${useOther?'':'hidden'} style="margin-top:6px">`;
+    }else if(d.opts) inp=`<select name="${d.k}">${[...new Set([...(d.opts),...(val&&!d.opts.includes(val)?[val]:[])])].map(o=>`<option ${o==val?'selected':''}>${esc(o)}</option>`).join('')}</select>`;
     else if(d.t==='area') inp=`<textarea name="${d.k}" rows="2">${esc(val)}</textarea>`;
     else if(d.t==='check') inp=`<input type="checkbox" name="${d.k}" ${val?'checked':''} style="width:auto">`;
     else inp=`<input name="${d.k}" type="${d.t||'text'}" ${d.t==='number'?'step="any" inputmode="decimal"':''} value="${esc(val)}" ${d.req?'required':''}>`;
@@ -324,6 +355,8 @@ function form(title,fields,obj,onSave,onDel){
     if(dlg.returnValue!=='ok') return;
     const fd=new FormData(f);
     fields.forEach(d=>{let v=fd.get(d.k);
+      if(d.other&&v===OTHER_STORE){v=String(fd.get(d.k+'__custom')||'').trim();rememberShop(v)}
+      else if(d.other&&v) rememberShop(v);
       if(d.t==='check') v=!!v; else if(d.t==='number') v=(v===''||v==null)?null:Number(v);
       obj[d.k]=v});
     obj.updatedAt=stamp(obj.updatedAt);
@@ -368,7 +401,7 @@ function editWish(id){
   const w=id?S.wishlist.find(x=>x.id===id):{id:uid('w'),item:'',status:'想買',deposit:0,finalPaid:0,receivable:0,date:today()};
   form(id?'修改項目':'新增 Wishlist',[{k:'item',l:'項目',req:1},{k:'status',l:'狀態',opts:WISH_ST},{k:'maker',l:'廠商'},
     {k:'price',l:'售價',t:'number'},{k:'deposit',l:'已付訂金',t:'number'},{k:'finalPaid',l:'已付尾數／全數',t:'number'},
-    {k:'store',l:'店舖'},{k:'orderRef',l:'單號'},{k:'forWhom',l:'為誰買'},{k:'receivable',l:'應收（代付）',t:'number'},
+    {k:'store',l:'店舖',opts:shopOpts(),other:1},{k:'orderRef',l:'單號'},{k:'forWhom',l:'為誰買'},{k:'receivable',l:'應收（代付）',t:'number'},
     {k:'receivedBack',l:'已收返應收',t:'check'},{k:'date',l:'日期',t:'date'},{k:'notes',l:'備註',t:'area'}],
     w,o=>upsertLocal('wishlist',o,!id),id?()=>tombstone('wishlist',id):null);
 }
