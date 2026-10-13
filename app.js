@@ -1,5 +1,5 @@
 'use strict';
-const KEY='hhledger.v1', SYNC_KEY='hhledger.sync', SYNCQ_KEY='hhledger.syncq', APP_VER='v18';
+const KEY='hhledger.v1', SYNC_KEY='hhledger.sync', SYNCQ_KEY='hhledger.syncq', APP_VER='v19';
 const TX_TYPES=['支出','收入','轉帳','分期還款'];
 const WISH_ST=['想買','棄單','唔想要','已訂','已付訂金','訂咗等拎','已買','收咗'];
 /* 常用店舖／商戶（Wishlist 店舖、記帳對方／商戶、固定支出帳單商戶；「其他」可自由輸入並記住） */
@@ -93,6 +93,8 @@ async function load(){
 function normalize(){
   ['accounts','transactions','installments','wishlist','categories','salary','forecast','bonus','archive','loans','recurring','shops'].forEach(k=>{if(!Array.isArray(S[k]))S[k]=[]});
   if(!S.burden)S.burden={};
+  // 舊錯字「氣單」→「棄單」（放棄）
+  live(S.wishlist).forEach(w=>{if(w.status==='氣單'){w.status='棄單';w.updatedAt=stamp(w.updatedAt);Sync.queue('wishlist',w)}});
 }
 
 /* ---------- 計算 ---------- */
