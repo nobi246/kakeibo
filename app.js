@@ -26,7 +26,7 @@ window.toggleStoreOther=sel=>{
   if(sel.value===OTHER_STORE){custom.hidden=false;custom.required=!!sel.closest('label');custom.focus()}
   else{custom.hidden=true;custom.required=false;custom.value=''}
 };
-let S=null, tab='overview', txMonth=null, wishFilter='全部', ovMonth=null, ovYear=null, txLimit=300, txQuery='', arKind='summary', arId='';
+let S=null, tab='overview', txMonth=null, wishFilter='全部', wishAnchorOnOpen=true, ovMonth=null, ovYear=null, txLimit=300, txQuery='', arKind='summary', arId='';
 const $=s=>document.querySelector(s);
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const n=x=>typeof x==='number'&&isFinite(x)?x:0;
@@ -155,6 +155,10 @@ function render(){
   Sync.badge();
   if(tab==='loan')loanAnimate();
   checkReserveNotify();
+  if(tab==='wish'&&wishAnchorOnOpen){
+    wishAnchorOnOpen=false;
+    requestAnimationFrame(()=>{const el=$('#wish-anchor-now');if(el)el.scrollIntoView({block:'start',behavior:'auto'})});
+  }
 }
 function rerender(keepScroll){const y=window.scrollY;render();window.scrollTo(0,keepScroll?y:0)}
 
@@ -280,18 +284,49 @@ function vInst(){
   <button class="fab" onclick="editInst()">＋</button>`;
 }
 
+
+/* Wishlist：按預計發售月排序（過去→而家→未來），打開時錨喺「而家」 */
+function wishMonthKey(w){
+  const m=String(w.dueMonth||'').trim();
+  if(/^\d{4}-\d{2}$/.test(m)) return m;
+  const d=String(w.date||'').trim();
+  if(/^\d{4}-\d{2}/.test(d)) return d.slice(0,7);
+  return '9999-99';
+}
+function wishMonthLabel(k){
+  if(k==='9999-99') return '未定發售月';
+  const [y,mo]=k.split('-');
+  return y+'年'+Number(mo)+'月';
+}
+function curWishMonth(){return today().slice(0,7)}
 function vWish(){
   const W=live(S.wishlist);
-  const list=W.filter(w=>wishFilter==='全部'||w.status===wishFilter);
+  const list=W.filter(w=>wishFilter==='全部'||w.status===wishFilter)
+    .slice().sort((a,b)=>{const ka=wishMonthKey(a),kb=wishMonthKey(b);return ka!==kb?ka.localeCompare(kb):String(a.item||'').localeCompare(String(b.item||''),'zh-HK')});
   const cnt=s=>W.filter(w=>s==='全部'||w.status===s).length;
-  return `<div class="chips">${['全部',...WISH_ST].map(s=>`<button class="${s===wishFilter?'on':''}" onclick="wishFilter='${s}';render()">${s} ${cnt(s)}</button>`).join('')}</div>
+  const nowM=curWishMonth();
+  let body='', last=null, anchored=false;
+  const mark=()=>{if(anchored)return'';anchored=true;return `<div id="wish-anchor-now" class="wish-now-mark">▼ 而家（${nowM}）· 向上撈睇過去 · 向下睇未來</div>`};
+  for(const w of list){
+    const k=wishMonthKey(w);
+    if(k!==last){
+      if(!anchored && (k>=nowM || k==='9999-99')) body+=mark();
+      last=k;
+      const cls=k===nowM?'wish-mo now':(k!=='9999-99'&&k<nowM?'wish-mo past':'wish-mo');
+      body+=`<div class="${cls}">${esc(wishMonthLabel(k))}${k===nowM?' · 本月':k!=='9999-99'&&k<nowM?' · 已過':''}</div>`;
+    }
+    body+=`<div class="row" onclick="editWish('${esc(w.id)}')"><div class="l">${esc(w.item)}
+    <span class="pill ${w.status==='已買'?'ok':(w.status==='已付訂金'||w.status==='訂咗等拎')?'amber':''}">${esc(w.status)}</span>
+    ${n(w.receivable)?`<span class="pill ${w.receivedBack?'ok':'red'}">${w.receivedBack?'已收返':'應收 '+fmt0(w.receivable)}</span>`:''}
+    <small class="note">${esc(w.store||'')}${w.orderRef?' · '+esc(w.orderRef):''}${w.forWhom?' · 為 '+esc(w.forWhom):''}${w.dueMonth?' · 發售 '+esc(w.dueMonth):''}${w.date?' · '+w.date:''}${w.notes?'<br>'+esc(w.notes):''}</small></div>
+    <div class="r">${w.price!=null?'售價 '+fmt0(w.price)+'<br>':''}${n(w.deposit)?'訂金 '+fmt0(w.deposit)+'<br>':''}${n(w.finalPaid)?'已付 '+fmt0(w.finalPaid):''}</div></div>`;
+  }
+  if(!anchored) body+=mark();
+  return `<div class="chips">${['全部',...WISH_ST].map(s=>`<button class="${s===wishFilter?'on':''}" onclick="wishFilter='${s}';wishAnchorOnOpen=true;render()">${s} ${cnt(s)}</button>`).join('')}</div>
   <div class="grid2"><div class="card"><h2>已付訂金</h2><div class="big">${fmt0(depositsHeld())}</div></div>
   <div class="card"><h2>partner 應收</h2><div class="big pos">${fmt0(receivable())}</div></div></div>
-  <div class="card">${list.length?list.map(w=>`<div class="row" onclick="editWish('${esc(w.id)}')"><div class="l">${esc(w.item)}
-    <span class="pill ${w.status==='已買'?'ok':w.status==='已付訂金'?'amber':''}">${esc(w.status)}</span>
-    ${n(w.receivable)?`<span class="pill ${w.receivedBack?'ok':'red'}">${w.receivedBack?'已收返':'應收 '+fmt0(w.receivable)}</span>`:''}
-    <small class="note">${esc(w.store)}${w.orderRef?' · '+esc(w.orderRef):''}${w.forWhom?' · 為 '+esc(w.forWhom):''}${w.date?' · '+w.date:''}${w.notes?'<br>'+esc(w.notes):''}</small></div>
-    <div class="r">${w.price!=null?'售價 '+fmt0(w.price)+'<br>':''}${n(w.deposit)?'訂金 '+fmt0(w.deposit)+'<br>':''}${n(w.finalPaid)?'已付 '+fmt0(w.finalPaid):''}</div></div>`).join(''):'<div class="sub">冇項目</div>'}</div>
+  <div class="sub tip">📅 按預計發售月排：過去喺上面（向上撈）、而家錨點、未來喺下面。冇填發售月嘅用訂購日／「未定」。</div>
+  <div class="card">${list.length?body:'<div class="sub">冇項目</div>'}</div>
   <button class="fab" onclick="editWish()">＋</button>`;
 }
 
@@ -405,7 +440,7 @@ function editWish(id){
   form(id?'修改項目':'新增 Wishlist',[{k:'item',l:'項目',req:1},{k:'status',l:'狀態',opts:WISH_ST},{k:'maker',l:'廠商'},
     {k:'price',l:'售價',t:'number'},{k:'deposit',l:'已付訂金',t:'number'},{k:'finalPaid',l:'已付尾數／全數',t:'number'},
     {k:'store',l:'店舖',opts:shopOpts(),other:1},{k:'orderRef',l:'單號'},{k:'forWhom',l:'為誰買'},{k:'receivable',l:'應收（代付）',t:'number'},
-    {k:'receivedBack',l:'已收返應收',t:'check'},{k:'date',l:'日期',t:'date'},{k:'notes',l:'備註',t:'area'}],
+    {k:'receivedBack',l:'已收返應收',t:'check'},{k:'dueMonth',l:'預計發售月（YYYY-MM）'},{k:'date',l:'訂購／入帳日',t:'date'},{k:'notes',l:'備註',t:'area'}],
     w,o=>upsertLocal('wishlist',o,!id),id?()=>tombstone('wishlist',id):null);
 }
 const SAL_F=[{k:'date',l:'生效日',t:'date',req:1},{k:'company',l:'公司'},{k:'reason',l:'原因（Review／Join／Transfer…）'},{k:'label',l:'標記（例如 Year 5 (38)）'},
@@ -990,7 +1025,7 @@ function settings(){
 $('#importFile').onchange=e=>{const file=e.target.files[0];if(!file)return;const r=new FileReader();
   r.onload=()=>{try{const d=JSON.parse(r.result);if(!d.accounts||!d.transactions)throw 0;S=d;normalize();save();$('#dlg').close();render();alert('匯入成功'+(Sync.on()?'。如要放上雲端，去設定撳「首次上載全部資料」。':''))}catch(_){alert('檔案格式唔啱')}e.target.value=''};r.readAsText(file)};
 $('#menuBtn').onclick=settings;
-document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{tab=b.dataset.tab;history.replaceState(null,'','#'+tab);rerender()});
-{const h=location.hash.slice(1);if(TITLES[h])tab=h;}
+document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{const next=b.dataset.tab;if(next==='wish'&&tab!=='wish')wishAnchorOnOpen=true;tab=next;history.replaceState(null,'','#'+tab);rerender()});
+{const h=location.hash.slice(1);if(TITLES[h]){tab=h;if(h==='wish')wishAnchorOnOpen=true}}
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(()=>{});
 load();
