@@ -1,7 +1,7 @@
 'use strict';
 const KEY='hhledger.v1', SYNC_KEY='hhledger.sync', SYNCQ_KEY='hhledger.syncq';
 const TX_TYPES=['支出','收入','轉帳','分期還款'];
-const WISH_ST=['想買','已訂','已付訂金','已買','訂咗等拎'];
+const WISH_ST=['想買','氣單','唔想要','已訂','已付訂金','訂咗等拎','已買'];
 /* 常用店舖／商戶（Wishlist 店舖、記帳對方／商戶、固定支出帳單商戶；「其他」可自由輸入並記住） */
 const DEFAULT_STORES=['孤注一扭','FROM JAPAN','ONEMAP','Buyee','AMAZON','L Model','淘寶傲峰','玩具迷城','精品','香港玩具所','HOBBY LAND','Premium Bandai','AmiAmi','Carousell','Buy and Ship','港魂','爆米玩具','Mandarake','HKTVmall','Keeta','foodpanda','Uber Eats','PayPal','Apple','Google','YouTube','SmarTone','CMHK','HKBN','WSD','Prudential','停車場','Mum'];
 const OTHER_STORE='其他';
