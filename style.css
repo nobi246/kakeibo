@@ -163,3 +163,8 @@ details summary{cursor:pointer;padding:6px 0}
 .wish-row .wish-meta{display:block;font-size:11px;color:var(--mute);line-height:1.2;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .wish-row .wish-money{display:flex;flex-direction:column;align-items:flex-end;font-size:12px;line-height:1.25;font-variant-numeric:tabular-nums}
 .wish-row .wish-money .neg{color:#8a1f12}.wish-row .wish-money .pos{color:#145c48}
+
+.wish-acts{display:flex;flex-wrap:wrap;gap:4px;margin-top:3px}
+.wish-qbtn{appearance:none;border:1px solid var(--line);background:var(--card);color:var(--fg);font-size:11px;line-height:1;padding:4px 8px;border-radius:999px;cursor:pointer}
+.wish-qbtn.pri{background:var(--pri);border-color:var(--pri);color:#fff;font-weight:600}
+.wish-qbtn:active{opacity:.85}

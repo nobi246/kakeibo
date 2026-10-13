@@ -1,7 +1,7 @@
 'use strict';
 const KEY='hhledger.v1', SYNC_KEY='hhledger.sync', SYNCQ_KEY='hhledger.syncq';
 const TX_TYPES=['支出','收入','轉帳','分期還款'];
-const WISH_ST=['想買','氣單','唔想要','已訂','已付訂金','訂咗等拎','已買'];
+const WISH_ST=['想買','氣單','唔想要','已訂','已付訂金','訂咗等拎','已買','收咗'];
 /* 常用店舖／商戶（Wishlist 店舖、記帳對方／商戶、固定支出帳單商戶；「其他」可自由輸入並記住） */
 const DEFAULT_STORES=['孤注一扭','FROM JAPAN','ONEMAP','Buyee','AMAZON','L Model','淘寶傲峰','玩具迷城','精品','香港玩具所','HOBBY LAND','Premium Bandai','AmiAmi','Carousell','Buy and Ship','港魂','爆米玩具','Mandarake','HKTVmall','Keeta','foodpanda','Uber Eats','PayPal','Apple','Google','YouTube','SmarTone','CMHK','HKBN','WSD','Prudential','停車場','Mum'];
 const OTHER_STORE='其他';
@@ -302,11 +302,32 @@ function curWishMonth(){return today().slice(0,7)}
 function wishPaid(w){return n(w.deposit)+n(w.finalPaid)}
 function wishOwed(w){const p=n(w.price),paid=wishPaid(w);return p>0?Math.max(0,p-paid):null}
 function wishMoShort(w){const k=wishMonthKey(w);if(k==='9999-99')return'未定';const [y,mo]=k.split('-');const cy=curWishMonth().slice(0,4);return y===cy?(Number(mo)+'月'):(y.slice(2)+'/'+mo)}
+function setWishSt(id,st){
+  const w=S.wishlist.find(x=>x.id===id); if(!w)return;
+  if(w.status===st)return;
+  w.status=st; w.updatedAt=stamp(w.updatedAt);
+  Sync.queue('wishlist',w); save(); rerender(1); toast('已標「'+st+'」');
+}
+function wishQuickBtns(w){
+  const cur=w.status||'', id=esc(w.id);
+  const cands=[
+    {lab:'收咗',st:'收咗',cls:'pri'},
+    {lab:'買咗',st:'已買',cls:''},
+    {lab:'等拎',st:'訂咗等拎',cls:''},
+    {lab:'氣單',st:'氣單',cls:''},
+    {lab:'唔要',st:'唔想要',cls:''},
+  ].filter(b=>b.st!==cur);
+  // 收咗優先，最多顯示 3 個，保持列表矮
+  const show=[];
+  const got=cands.find(b=>b.st==='收咗'); if(got) show.push(got);
+  for(const b of cands){ if(show.length>=3)break; if(!show.includes(b)) show.push(b); }
+  return `<span class="wish-acts" onclick="event.stopPropagation()">${show.map(b=>`<button type="button" class="wish-qbtn ${b.cls}" onclick="setWishSt('${id}','${b.st}')">${b.lab}</button>`).join('')}</span>`;
+}
 function wishRow(w){
   const paid=wishPaid(w), owed=wishOwed(w);
   const owedTxt=owed==null?(n(w.price)?'—':(paid?'尾款未定':'—')):fmt0(owed);
   const owedCls=owed!=null&&owed>0?'neg':(owed===0?'pos':'');
-  return `<div class="row wish-row" onclick="editWish('${esc(w.id)}')"><div class="l"><b class="wish-name">${esc(w.item||'（未命名）')}</b><span class="wish-meta">${esc(wishMoShort(w))} · ${esc(w.store||'未填店舖')}</span></div><div class="r wish-money"><span>已付 ${fmt0(paid)}</span><span class="${owedCls}">仲欠 ${owedTxt}</span></div></div>`;
+  return `<div class="row wish-row" onclick="editWish('${esc(w.id)}')"><div class="l"><b class="wish-name">${esc(w.item||'（未命名）')}</b><span class="wish-meta">${esc(wishMoShort(w))} · ${esc(w.store||'未填店舖')}</span>${wishQuickBtns(w)}</div><div class="r wish-money"><span>已付 ${fmt0(paid)}</span><span class="${owedCls}">仲欠 ${owedTxt}</span></div></div>`;
 }
 function vWish(){
   const W=live(S.wishlist);
@@ -330,7 +351,7 @@ function vWish(){
   return `<div class="chips">${['全部',...WISH_ST].map(s=>`<button class="${s===wishFilter?'on':''}" onclick="wishFilter='${s}';wishAnchorOnOpen=true;render()">${s} ${cnt(s)}</button>`).join('')}</div>
   <div class="grid2"><div class="card"><h2>已付訂金</h2><div class="big">${fmt0(depositsHeld())}</div></div>
   <div class="card"><h2>partner 應收</h2><div class="big pos">${fmt0(receivable())}</div></div></div>
-  <div class="sub tip">📅 按發售月排；撳項目睇詳情。列表只顯示發售月、名、已付、仲欠、店舖。</div>
+  <div class="sub tip">📅 按發售月排；列表可直接撳「收咗／買咗」改狀態，撳名睇詳情。</div>
   <div class="card">${list.length?body:'<div class="sub">冇項目</div>'}</div>
   <button class="fab" onclick="editWish()">＋</button>`;
 }
