@@ -299,6 +299,15 @@ function wishMonthLabel(k){
   return y+'年'+Number(mo)+'月';
 }
 function curWishMonth(){return today().slice(0,7)}
+function wishPaid(w){return n(w.deposit)+n(w.finalPaid)}
+function wishOwed(w){const p=n(w.price),paid=wishPaid(w);return p>0?Math.max(0,p-paid):null}
+function wishMoShort(w){const k=wishMonthKey(w);if(k==='9999-99')return'未定';const [y,mo]=k.split('-');const cy=curWishMonth().slice(0,4);return y===cy?(Number(mo)+'月'):(y.slice(2)+'/'+mo)}
+function wishRow(w){
+  const paid=wishPaid(w), owed=wishOwed(w);
+  const owedTxt=owed==null?(n(w.price)?'—':(paid?'尾款未定':'—')):fmt0(owed);
+  const owedCls=owed!=null&&owed>0?'neg':(owed===0?'pos':'');
+  return `<div class="row wish-row" onclick="editWish('${esc(w.id)}')"><div class="l"><b class="wish-name">${esc(w.item||'（未命名）')}</b><span class="wish-meta">${esc(wishMoShort(w))} · ${esc(w.store||'未填店舖')}</span></div><div class="r wish-money"><span>已付 ${fmt0(paid)}</span><span class="${owedCls}">仲欠 ${owedTxt}</span></div></div>`;
+}
 function vWish(){
   const W=live(S.wishlist);
   const list=W.filter(w=>wishFilter==='全部'||w.status===wishFilter)
@@ -315,17 +324,13 @@ function vWish(){
       const cls=k===nowM?'wish-mo now':(k!=='9999-99'&&k<nowM?'wish-mo past':'wish-mo');
       body+=`<div class="${cls}">${esc(wishMonthLabel(k))}${k===nowM?' · 本月':k!=='9999-99'&&k<nowM?' · 已過':''}</div>`;
     }
-    body+=`<div class="row" onclick="editWish('${esc(w.id)}')"><div class="l">${esc(w.item)}
-    <span class="pill ${w.status==='已買'?'ok':(w.status==='已付訂金'||w.status==='訂咗等拎')?'amber':''}">${esc(w.status)}</span>
-    ${n(w.receivable)?`<span class="pill ${w.receivedBack?'ok':'red'}">${w.receivedBack?'已收返':'應收 '+fmt0(w.receivable)}</span>`:''}
-    <small class="note">${esc(w.store||'')}${w.orderRef?' · '+esc(w.orderRef):''}${w.forWhom?' · 為 '+esc(w.forWhom):''}${w.dueMonth?' · 發售 '+esc(w.dueMonth):''}${w.date?' · '+w.date:''}${w.notes?'<br>'+esc(w.notes):''}</small></div>
-    <div class="r">${w.price!=null?'售價 '+fmt0(w.price)+'<br>':''}${n(w.deposit)?'訂金 '+fmt0(w.deposit)+'<br>':''}${n(w.finalPaid)?'已付 '+fmt0(w.finalPaid):''}</div></div>`;
+    body+=wishRow(w);
   }
   if(!anchored) body+=mark();
   return `<div class="chips">${['全部',...WISH_ST].map(s=>`<button class="${s===wishFilter?'on':''}" onclick="wishFilter='${s}';wishAnchorOnOpen=true;render()">${s} ${cnt(s)}</button>`).join('')}</div>
   <div class="grid2"><div class="card"><h2>已付訂金</h2><div class="big">${fmt0(depositsHeld())}</div></div>
   <div class="card"><h2>partner 應收</h2><div class="big pos">${fmt0(receivable())}</div></div></div>
-  <div class="sub tip">📅 按預計發售月排：過去喺上面（向上撈）、而家錨點、未來喺下面。冇填發售月嘅用訂購日／「未定」。</div>
+  <div class="sub tip">📅 按發售月排；撳項目睇詳情。列表只顯示發售月、名、已付、仲欠、店舖。</div>
   <div class="card">${list.length?body:'<div class="sub">冇項目</div>'}</div>
   <button class="fab" onclick="editWish()">＋</button>`;
 }
