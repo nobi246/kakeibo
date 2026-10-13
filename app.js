@@ -1,5 +1,5 @@
 'use strict';
-const KEY='hhledger.v1', SYNC_KEY='hhledger.sync', SYNCQ_KEY='hhledger.syncq';
+const KEY='hhledger.v1', SYNC_KEY='hhledger.sync', SYNCQ_KEY='hhledger.syncq', APP_VER='v17';
 const TX_TYPES=['支出','收入','轉帳','分期還款'];
 const WISH_ST=['想買','氣單','唔想要','已訂','已付訂金','訂咗等拎','已買','收咗'];
 /* 常用店舖／商戶（Wishlist 店舖、記帳對方／商戶、固定支出帳單商戶；「其他」可自由輸入並記住） */
@@ -1008,9 +1008,20 @@ const Sync={
 };
 
 /* ---------- 設定／匯出匯入 ---------- */
+async function forceAppRefresh(){
+  try{
+    if(confirm('會清 App 快取同重新載入最新版。本機家計簿資料唔會刪（除非你之前未同步又清咗網站資料）。繼續？')){
+      if('caches' in window){const ks=await caches.keys();await Promise.all(ks.map(k=>caches.delete(k)))}
+      if('serviceWorker' in navigator){const regs=await navigator.serviceWorker.getRegistrations();await Promise.all(regs.map(r=>r.unregister()))}
+      location.replace(location.pathname+location.search+location.hash+(location.search||location.hash?'&':'?')+'_='+Date.now());
+    }
+  }catch(e){alert('刷新失敗，請用 Safari 開網站再加入主畫面。');location.reload()}
+}
 function settings(){
   const f=$('#dlgForm'), c=Sync.cfg();
   f.innerHTML=`<h3 style="margin:0">設定／備份</h3>
+  <div class="sub">App 程式版本：${APP_VER}（Wishlist 精簡列／快捷掣要 v16+）</div>
+  <button type="button" class="primary" id="forceRefreshBtn">🔃 強制刷新 App（拎最新版）</button>
   <button type="button" class="primary" id="expBtn">⬇️ 匯出 JSON 備份</button>
   <button type="button" id="impBtn">⬆️ 匯入 JSON</button>
   <button type="button" id="rstBtn" style="color:var(--warn)">↺ 重設為種子資料（會清走本機改動）</button>
@@ -1031,6 +1042,7 @@ function settings(){
   <div class="sub" id="syncStatus">${Sync.on()?Sync.statusHtml():'未設定'}</div>
   <div class="actions"><button value="cancel">關閉</button></div>`;
   const dlg=$('#dlg');dlg.onclose=null;
+  $('#forceRefreshBtn').onclick=()=>forceAppRefresh();
   $('#expBtn').onclick=()=>{const b=new Blob([JSON.stringify(S,null,1)],{type:'application/json'});
     const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download=`家計簿備份_${today()}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),2000)};
   $('#impBtn').onclick=()=>$('#importFile').click();
@@ -1053,5 +1065,11 @@ $('#importFile').onchange=e=>{const file=e.target.files[0];if(!file)return;const
 $('#menuBtn').onclick=settings;
 document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{const next=b.dataset.tab;if(next==='wish'&&tab!=='wish')wishAnchorOnOpen=true;tab=next;history.replaceState(null,'','#'+tab);rerender()});
 {const h=location.hash.slice(1);if(TITLES[h]){tab=h;if(h==='wish')wishAnchorOnOpen=true}}
-if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(()=>{});
+if('serviceWorker' in navigator){
+  navigator.serviceWorker.register('sw.js').then(reg=>{
+    reg.update().catch(()=>{});
+    let refreshing=false;
+    navigator.serviceWorker.addEventListener('controllerchange',()=>{if(refreshing)return;refreshing=true;location.reload()});
+  }).catch(()=>{});
+}
 load();
