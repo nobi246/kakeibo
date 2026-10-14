@@ -1,5 +1,5 @@
 'use strict';
-const KEY='hhledger.v1', SYNC_KEY='hhledger.sync', SYNCQ_KEY='hhledger.syncq', APP_VER='v19';
+const KEY='hhledger.v1', SYNC_KEY='hhledger.sync', SYNCQ_KEY='hhledger.syncq', APP_VER='v20';
 const TX_TYPES=['支出','收入','轉帳','分期還款'];
 const WISH_ST=['想買','棄單','唔想要','已訂','已付訂金','訂咗等拎','已買','收咗'];
 /* 常用店舖／商戶（Wishlist 店舖、記帳對方／商戶、固定支出帳單商戶；「其他」可自由輸入並記住） */
@@ -26,7 +26,7 @@ window.toggleStoreOther=sel=>{
   if(sel.value===OTHER_STORE){custom.hidden=false;custom.required=!!sel.closest('label');custom.focus()}
   else{custom.hidden=true;custom.required=false;custom.value=''}
 };
-let S=null, tab='overview', txMonth=null, wishFilter='全部', wishAnchorOnOpen=true, ovMonth=null, ovYear=null, txLimit=300, txQuery='', arKind='summary', arId='';
+let S=null, tab='overview', txMonth=null, wishFilter='全部', wishAnchorOnOpen=true, ovMonth=null, ovYear=null, txLimit=300, txQuery='', txKind='全部', arKind='summary', arId='';
 const $=s=>document.querySelector(s);
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const n=x=>typeof x==='number'&&isFinite(x)?x:0;
@@ -110,6 +110,26 @@ const cashAccts=()=>{const A=live(S.accounts);const pref=A.filter(a=>a.id==='hsb
   return A.filter(a=>a.stmtBal==null&&/銀行|現金|信封|儲備/.test(a.type||''))};
 const cashReserve=()=>cashAccts().reduce((s,a)=>s+n(a.balance),0);
 const hasCashTrack=()=>cashAccts().length>0;
+/* 記帳篩選：現金／儲蓄 vs 信用卡（用帳戶名稱對） */
+const _normAcct=s=>String(s||'').toLowerCase().replace(/\s+/g,'');
+const cashAcctNames=()=>cashAccts().map(a=>a.name).filter(Boolean);
+const cardAcctNames=()=>cards().map(a=>a.name).filter(Boolean);
+function txMatchesNames(t,names){
+  const acc=_normAcct(t.account); if(!acc)return false;
+  return names.some(n=>{const nn=_normAcct(n); return nn&&(acc===nn||acc.includes(nn)||nn.includes(acc));});
+}
+function isCashLikeTx(t){
+  if(txMatchesNames(t,cashAcctNames()))return true;
+  const acc=_normAcct(t.account);
+  if(/visa|citi|mastercard|amex|信用卡|premier|signature/.test(acc))return false;
+  return /hsbcone|hsbc\s*one|港元儲蓄|儲蓄|543|現金|八達通|信封|儲備|^bank$|滙豐.*存款|one\s*account/.test(acc);
+}
+function isCardLikeTx(t){
+  if(txMatchesNames(t,cardAcctNames()))return true;
+  const acc=_normAcct(t.account);
+  return /visa|citi|mastercard|amex|信用卡|premier|signature|hsbcvisa/.test(acc);
+}
+
 /* 儲備安全線：預設 max(10000, 約一個月固定支出)；localStorage hhledger.reserveFloor 可覆寫 */
 const reserveFloor=()=>{const o=localStorage.getItem('hhledger.reserveFloor');if(o!=null&&o!==''&&!isNaN(+o))return Math.max(0,+o);
   let t=0;try{t=n(fxStats().total)}catch(_){}return Math.max(10000,Math.round(t))};
@@ -233,12 +253,17 @@ function vYear(){
 function vTx(){
   const q=txQuery.trim().toLowerCase();
   let list=(txMonth?monthTx(txMonth):live(S.transactions));
+  if(txKind==='現金儲蓄') list=list.filter(isCashLikeTx);
+  else if(txKind==='信用卡') list=list.filter(isCardLikeTx);
   if(q) list=list.filter(t=>[t.desc,t.sub,t.category,t.account,t.notes,t.tag,t.src].some(x=>String(x||'').toLowerCase().includes(q)));
   list=list.slice().sort((a,b)=>(b.date||'').localeCompare(a.date||''));
   const total=list.filter(isSpend).reduce((s,t)=>s+n(t.amount),0);
   const shown=list.slice(0,txLimit);
+  const kindBtn=(k,label)=>`<button type="button" class="${txKind===k?'ok':''}" onclick="txKind='${k}';txLimit=300;render()">${label}</button>`;
   return `<div class="month"><input type="month" value="${txMonth}" onchange="txMonth=this.value;txLimit=300;render()">
-    <button onclick="txMonth='';txLimit=300;render()">全部</button><span class="sub">${list.length} 筆 · 支出 ${fmt0(total)}</span></div>
+    <button onclick="txMonth='';txLimit=300;render()">全部月份</button><span class="sub">${list.length} 筆 · 支出 ${fmt0(total)}</span></div>
+  <div class="month">${kindBtn('全部','全部帳戶')}${kindBtn('現金儲蓄','現金／儲蓄')}${kindBtn('信用卡','信用卡')}</div>
+  ${txKind==='現金儲蓄'?`<div class="sub tip">💰 只睇銀行／現金／儲蓄戶口流水（唔計入卡債壓力）。HSBC 直接付款授權可之後揀住入呢度。</div>`:''}
   <div class="month"><input type="search" placeholder="搜尋（描述／分類／帳戶／Sep-25…）" value="${esc(txQuery)}" onchange="txQuery=this.value;txLimit=300;render()"></div>
   <div class="card">${shown.length?shown.map(t=>`<div class="row" onclick="editTx('${esc(t.id)}')"><div class="l">${esc(t.desc||t.sub||t.category)}
     <small class="note">${t.date}${t.dm?'（只知月份）':''} · ${esc(t.type)} · ${esc(t.category)} · ${esc(t.account)}${t.tag?' · '+esc(t.tag):''}${t.hist?' · 舊檔 '+esc(sheetOf(t)):''}</small></div>
@@ -1022,7 +1047,7 @@ async function forceAppRefresh(){
 function settings(){
   const f=$('#dlgForm'), c=Sync.cfg();
   f.innerHTML=`<h3 style="margin:0">設定／備份</h3>
-  <div class="sub">App 程式版本：${APP_VER}（Wishlist 精簡列／快捷掣要 v16+）</div>
+  <div class="sub">App 程式版本：${APP_VER}（記帳現金／儲蓄篩選要 v20+）</div>
   <button type="button" class="primary" id="forceRefreshBtn">🔃 強制刷新 App（拎最新版）</button>
   <button type="button" class="primary" id="expBtn">⬇️ 匯出 JSON 備份</button>
   <button type="button" id="impBtn">⬆️ 匯入 JSON</button>
