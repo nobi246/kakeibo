@@ -259,10 +259,10 @@ function vTx(){
   list=list.slice().sort((a,b)=>(b.date||'').localeCompare(a.date||''));
   const total=list.filter(isSpend).reduce((s,t)=>s+n(t.amount),0);
   const shown=list.slice(0,txLimit);
-  const kindBtn=(k,label)=>`<button type="button" class="${txKind===k?'ok':''}" onclick="txKind='${k}';txLimit=300;render()">${label}</button>`;
+  const kindBtn=(k,label)=>`<button type="button" class="${txKind===k?'on':''}" onclick="txKind='${k}';txLimit=300;render()">${label}</button>`;
   return `<div class="month"><input type="month" value="${txMonth}" onchange="txMonth=this.value;txLimit=300;render()">
     <button onclick="txMonth='';txLimit=300;render()">全部月份</button><span class="sub">${list.length} 筆 · 支出 ${fmt0(total)}</span></div>
-  <div class="month">${kindBtn('全部','全部帳戶')}${kindBtn('現金儲蓄','現金／儲蓄')}${kindBtn('信用卡','信用卡')}</div>
+  <div class="chips">${kindBtn('全部','全部帳戶')}${kindBtn('現金儲蓄','現金／儲蓄')}${kindBtn('信用卡','信用卡')}</div>
   ${txKind==='現金儲蓄'?`<div class="sub tip">💰 只睇銀行／現金／儲蓄戶口流水（唔計入卡債壓力）。HSBC 直接付款授權可之後揀住入呢度。</div>`:''}
   <div class="month"><input type="search" placeholder="搜尋（描述／分類／帳戶／Sep-25…）" value="${esc(txQuery)}" onchange="txQuery=this.value;txLimit=300;render()"></div>
   <div class="card">${shown.length?shown.map(t=>`<div class="row" onclick="editTx('${esc(t.id)}')"><div class="l">${esc(t.desc||t.sub||t.category)}
