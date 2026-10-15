@@ -1,5 +1,5 @@
 'use strict';
-const KEY='hhledger.v1', SYNC_KEY='hhledger.sync', SYNCQ_KEY='hhledger.syncq', APP_VER='v21';
+const KEY='hhledger.v1', SYNC_KEY='hhledger.sync', SYNCQ_KEY='hhledger.syncq', APP_VER='v22';
 const TX_TYPES=['支出','收入','轉帳','分期還款'];
 const WISH_ST=['想買','棄單','唔想要','已訂','已付訂金','訂咗等拎','已買','收咗'];
 /* 常用店舖／商戶（Wishlist 店舖、記帳對方／商戶、固定支出帳單商戶；「其他」可自由輸入並記住） */
@@ -95,6 +95,7 @@ function normalize(){
   if(!S.burden)S.burden={};
   // 舊錯字「氣單」→「棄單」（放棄）
   live(S.wishlist).forEach(w=>{if(w.status==='氣單'){w.status='棄單';w.updatedAt=stamp(w.updatedAt);Sync.queue('wishlist',w)}});
+  if(!S.categories.includes('退款／代付收回'))S.categories.push('退款／代付收回');
 }
 
 /* ---------- 計算 ---------- */
@@ -191,6 +192,37 @@ const burden=()=>loanMode()?activeLoans().reduce((s,l)=>s+n(l.monthly),0):burden
 const burdenParts=()=>{if(!loanMode())return burdenList().map(i=>[String(i.card||'').split(/[ （]/)[0],n(i.monthly)]);
   const g={};activeLoans().forEach(l=>{const k=String(l.card||l.lender||'其他').split(/[ （]/)[0];g[k]=(g[k]||0)+n(l.monthly)});return Object.entries(g).sort((a,b)=>b[1]-a[1])};
 const receivable=()=>live(S.wishlist).filter(w=>!w.receivedBack).reduce((s,w)=>s+n(w.receivable),0);
+/* partner 應收：有應收金額嘅 wishlist；未收排前，再按日期新→舊 */
+const chargeAcctOf=w=>String((w&&(w.chargeAccount||w.account||w.paidFrom))||'').trim();
+const chargeAcctOpts=()=>['',...live(S.accounts).filter(a=>a.id!=='recv').map(a=>a.name)];
+function recvItems(){
+  return live(S.wishlist).filter(w=>n(w.receivable)>0).slice().sort((a,b)=>{
+    const ua=!a.receivedBack,ub=!b.receivedBack; if(ua!==ub)return ua?-1:1;
+    const d=(b.date||'').localeCompare(a.date||''); if(d)return d;
+    return String(a.item||'').localeCompare(String(b.item||''),'zh-HK');
+  });
+}
+const chargeLabel=w=>{const c=chargeAcctOf(w);return c?'欠喺 '+c:'欠喺？（未設定）'};
+function ensureRecvIncome(w){
+  if(!w)return;
+  if(w.receivedBack&&n(w.receivable)>0&&w.recvAccount){
+    const desc='partner 收回：'+(w.item||'');
+    const d=w.recvDate||today();
+    let tx=w.recvTxId?S.transactions.find(x=>x.id===w.recvTxId):null;
+    if(tx&&!tx.deleted){
+      tx.type='收入';tx.category='退款／代付收回';tx.account=w.recvAccount;tx.amount=n(w.receivable);
+      tx.desc=desc;tx.date=d;tx.updatedAt=stamp(tx.updatedAt);Sync.queue('transactions',tx);
+    }else{
+      const nw={id:uid('t'),date:d,type:'收入',category:'退款／代付收回',account:w.recvAccount,amount:n(w.receivable),desc,notes:'由 partner 應收自動入帳',updatedAt:stamp()};
+      S.transactions.push(nw);Sync.queue('transactions',nw);
+      w.recvTxId=nw.id;w.updatedAt=stamp(w.updatedAt);Sync.queue('wishlist',w);
+    }
+  }else if(!w.receivedBack&&w.recvTxId){
+    const tx=S.transactions.find(x=>x.id===w.recvTxId);
+    if(tx&&!tx.deleted)tombstone('transactions',w.recvTxId);
+    w.recvTxId=null;w.updatedAt=stamp(w.updatedAt);Sync.queue('wishlist',w);
+  }
+}
 const depositsHeld=()=>live(S.wishlist).filter(w=>w.status==='已付訂金').reduce((s,w)=>s+n(w.deposit),0);
 const isSpend=t=>t.type==='支出'||t.type==='分期還款';
 const isRefund=t=>t.type==='收入'&&t.category==='退款／代付收回';
@@ -200,11 +232,11 @@ const monthTx=m=>live(S.transactions).filter(t=>(t.date||'').startsWith(m));
 const sheetOf=t=>(t.src||'').replace(/^xlsx:/,'').split('!')[0];
 
 /* ---------- 畫面 ---------- */
-const TITLES={overview:'總覽',tx:'記帳',accounts:'帳戶',inst:'分期',loan:'貸款',fixed:'每月固定支出',wish:'Wishlist',pay:'人工／預測'};
+const TITLES={overview:'總覽',tx:'記帳',accounts:'帳戶',inst:'分期',loan:'貸款',fixed:'每月固定支出',wish:'Wishlist',recv:'partner 應收',pay:'人工／預測'};
 function render(){
   $('#title').textContent=TITLES[tab];
   document.querySelectorAll('.tabs button').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));
-  $('#view').innerHTML=({overview:vOverview,tx:vTx,accounts:vAccounts,inst:vInst,loan:vLoan,fixed:vFixed,wish:vWish,pay:vPay})[tab]();
+  $('#view').innerHTML=({overview:vOverview,tx:vTx,accounts:vAccounts,inst:vInst,loan:vLoan,fixed:vFixed,wish:vWish,recv:vRecv,pay:vPay})[tab]();
   updateReserveBanner();
   Sync.badge();
   if(tab==='loan')loanAnimate();
@@ -263,7 +295,7 @@ function vOverview(){
   </div>
   ${live(S.recurring).length?(()=>{const f=fxStats();return `<div class="card" onclick="tab='fixed';history.replaceState(null,'','#fixed');render()"><h2>📌 每月固定支出</h2><div class="big">${fmt0(f.total)}</div><div class="sub">💸 貸款／分期 ${fmt0(f.loans)} + 📺 其他 ${fmt0(f.other)}（訂閱 ${fmt0(f.subs)}）→</div></div>`})():''}
   <div class="grid2">
-    <div class="card"><h2>partner 應收</h2><div class="big pos">${fmt0(receivable())}</div><div class="sub">代付待收</div></div>
+    <div class="card" onclick="tab='recv';history.replaceState(null,'','#recv');render()"><h2>partner 應收</h2><div class="big pos">${fmt0(receivable())}</div><div class="sub">代付待收 · 撳入睇明細 →</div></div>
     <div class="card"><h2>已付訂金（未到貨）</h2><div class="big">${fmt0(depositsHeld())}</div><div class="sub">訂金已付、尾數未找</div></div>
   </div>
   <div class="card"><h2>本月分類支出</h2>${Object.keys(byCat).length?Object.entries(byCat).sort((a,b)=>b[1]-a[1]).map(([c,v])=>`<div class="row"><div class="l">${esc(c)}</div><div class="r">${fmt(v)}</div></div>`).join(''):'<div class="sub">本月未有支出紀錄 — 去「記帳」加一筆。</div>'}</div>
@@ -312,7 +344,8 @@ function vAccounts(){
   return live(S.accounts).map(a=>{
     const isCard=a.stmtBal!=null;
     const bal=a.id==='recv'?receivable():a.balance;
-    return `<div class="card" onclick="editAcct('${esc(a.id)}')"><h2>${esc(a.name)} <span class="pill">${esc(a.type)}</span>${a.hist?' <span class="pill">舊檔</span>':''}</h2>
+    const go=a.id==='recv'?`onclick="tab='recv';history.replaceState(null,'','#recv');render()"`:`onclick="editAcct('${esc(a.id)}')"`;
+    return `<div class="card" ${go}><h2>${esc(a.name)} <span class="pill">${esc(a.type)}</span>${a.hist?' <span class="pill">舊檔</span>':''}</h2>${a.id==='recv'?`<div class="sub">撳入睇每筆應收／標已俾 →</div>`:''}
     ${isCard?(()=>{const lb=revolvingBal(a),fb=fmtBal(lb),ir=instRemain(a);
       const used=a.creditLimit!=null&&typeof a.availableCredit==='number'?Math.max(0,(a.creditLimit-n(a.availableCredit))/a.creditLimit):a.creditLimit?Math.max(0,Math.max(0,lb)+ir)/a.creditLimit:null;
       const sumSU=n(a.stmtBal)+instRemain(a);
@@ -358,6 +391,65 @@ function vInst(){
   <button class="fab" onclick="editInst()">＋</button>`;
 }
 
+
+/* ---------- partner 應收明細 ---------- */
+function vRecv(){
+  const items=recvItems(), unpaid=items.filter(w=>!w.receivedBack), paid=items.filter(w=>w.receivedBack);
+  const total=unpaid.reduce((s,w)=>s+n(w.receivable),0);
+  const row=w=>{
+    const st=w.receivedBack?'已收':'未收';
+    return `<div class="row" onclick="openRecvItem('${esc(w.id)}')"><div class="l"><b>${esc(w.item||'（未命名）')}</b>
+      <small class="note">${esc(w.forWhom||'')}${w.forWhom&&(w.store||w.orderRef)?' · ':''}${esc(w.store||'')}${w.orderRef?(w.store?' · ':'')+'#'+esc(w.orderRef):''}${w.date?' · '+esc(w.date):''}</small>
+      <small class="note">${esc(chargeLabel(w))}</small></div>
+      <div class="r ${w.receivedBack?'pos':''}">${fmt0(w.receivable)}<small class="note">${st}${w.receivedBack&&w.recvAccount?' → '+esc(w.recvAccount):''}</small></div></div>`;
+  };
+  return `<div class="card"><h2>未收合計</h2><div class="big pos">${fmt0(total)}</div>
+    <div class="sub">${unpaid.length} 筆未收 · ${paid.length} 筆已收 · 撳一筆標已俾／未俾，同睇「欠喺邊度」</div></div>
+  <div class="card"><h2>未收</h2>${unpaid.length?unpaid.map(row).join(''):'<div class="sub">全部收齊 ✓</div>'}</div>
+  ${paid.length?`<div class="card"><h2>已收</h2>${paid.map(row).join('')}</div>`:''}
+  <div class="actions"><button type="button" onclick="tab='overview';history.replaceState(null,'','#overview');render()">← 總覽</button>
+    <button type="button" onclick="tab='wish';history.replaceState(null,'','#wish');wishAnchorOnOpen=true;render()">← Wishlist</button></div>`;
+}
+function openRecvItem(id){
+  const w=S.wishlist.find(x=>x.id===id); if(!w)return;
+  const f=$('#dlgForm'), opts=chargeAcctOpts().filter(Boolean), ch=chargeAcctOf(w);
+  const acctOpts=['',...opts].map(o=>`<option value="${esc(o)}" ${o===(w.recvAccount||'')?'selected':''}>${o?esc(o):'（請揀銀行／信用卡戶口）'}</option>`).join('');
+  f.innerHTML=`<h3 style="margin:0">${esc(w.item||'（未命名）')}</h3>
+    <div class="sub">${fmt0(w.receivable)}${w.forWhom?' · 幫 '+esc(w.forWhom):''}${w.store?' · '+esc(w.store):''}${w.orderRef?' · #'+esc(w.orderRef):''}</div>
+    <div class="sub"><b>${esc(chargeLabel(w))}</b>${ch?'':' — 可撳「改資料」設代付支出戶口'}</div>
+    ${w.receivedBack
+      ?`<div class="sub pos">狀態：已收${w.recvAccount?' → '+esc(w.recvAccount):''}${w.recvDate?' · '+esc(w.recvDate):''}</div>
+        <div class="actions"><button value="cancel" formnovalidate>關閉</button>
+          <button type="button" id="unmarkRecvBtn">改返未俾</button>
+          <button type="button" id="editWishFromRecv">改資料</button></div>`
+      :`<div class="sub">狀態：未收</div>
+        <label>收回入帳戶口（partner 已俾入邊度）<select id="recvAcctSel" name="recvAccount">${acctOpts}</select></label>
+        <label>收回日期<input name="recvDate" id="recvDateInp" type="date" value="${esc(w.recvDate||today())}"></label>
+        <div class="sub">確認後會自動加／更新一筆收入：分類「退款／代付收回」</div>
+        <div class="actions"><button value="cancel" formnovalidate>關閉</button>
+          <button type="button" class="primary" id="markRecvBtn">標為已俾</button>
+          <button type="button" id="editWishFromRecv">改資料</button></div>`}`;
+  const dlg=$('#dlg'); dlg.onclose=null; dlg.returnValue='';
+  const goEdit=()=>{dlg.close();editWish(id)};
+  const editBtn=$('#editWishFromRecv'); if(editBtn)editBtn.onclick=goEdit;
+  const markBtn=$('#markRecvBtn');
+  if(markBtn)markBtn.onclick=()=>{
+    const acct=($('#recvAcctSel')||{}).value||'';
+    if(!String(acct).trim()){toast('請先揀收回入帳戶口');return}
+    w.receivedBack=true; w.recvAccount=String(acct).trim();
+    w.recvDate=(($('#recvDateInp')||{}).value)||today();
+    w.updatedAt=stamp(w.updatedAt); Sync.queue('wishlist',w);
+    ensureRecvIncome(w); save(); dlg.close(); rerender(1);
+    toast('已標已俾 → '+w.recvAccount);
+  };
+  const unBtn=$('#unmarkRecvBtn');
+  if(unBtn)unBtn.onclick=()=>{
+    if(!confirm('改返未俾？已入帳嘅收入會標刪（墓碑，方便同步）。'))return;
+    w.receivedBack=false; w.updatedAt=stamp(w.updatedAt); Sync.queue('wishlist',w);
+    ensureRecvIncome(w); save(); dlg.close(); rerender(1); toast('已改返未俾');
+  };
+  dlg.showModal();
+}
 
 /* Wishlist：按預計發售月排序（過去→而家→未來），打開時錨喺「而家」 */
 function wishMonthKey(w){
@@ -424,7 +516,7 @@ function vWish(){
   if(!anchored) body+=mark();
   return `<div class="chips">${['全部',...WISH_ST].map(s=>`<button class="${s===wishFilter?'on':''}" onclick="wishFilter='${s}';wishAnchorOnOpen=true;render()">${s} ${cnt(s)}</button>`).join('')}</div>
   <div class="grid2"><div class="card"><h2>已付訂金</h2><div class="big">${fmt0(depositsHeld())}</div></div>
-  <div class="card"><h2>partner 應收</h2><div class="big pos">${fmt0(receivable())}</div></div></div>
+  <div class="card" onclick="tab='recv';history.replaceState(null,'','#recv');render()"><h2>partner 應收</h2><div class="big pos">${fmt0(receivable())}</div><div class="sub">撳入明細 →</div></div></div>
   <div class="sub tip">📅 按發售月排；列表可直接撳「收咗／買咗」改狀態，撳名睇詳情。</div>
   <div class="card">${list.length?body:'<div class="sub">冇項目</div>'}</div>
   <button class="fab" onclick="editWish()">＋</button>`;
@@ -480,7 +572,7 @@ function form(title,fields,obj,onSave,onDel){
         opts.map(o=>`<option value="${esc(o)}" ${o===sel?'selected':''}>${esc(o)}</option>`).join('')+
         `<option value="${OTHER_STORE}" ${useOther?'selected':''}>${OTHER_STORE}</option></select>`+
         `<input name="${d.k}__custom" type="text" placeholder="輸入自訂店舖／商戶名" value="${useOther?esc(val):''}" ${useOther?'':'hidden'} style="margin-top:6px">`;
-    }else if(d.opts) inp=`<select name="${d.k}">${[...new Set([...(d.opts),...(val&&!d.opts.includes(val)?[val]:[])])].map(o=>`<option ${o==val?'selected':''}>${esc(o)}</option>`).join('')}</select>`;
+    }else if(d.opts) inp=`<select name="${d.k}">${[...new Set([...(d.opts),...(val!==''&&val!=null&&!d.opts.includes(val)?[val]:[])])].map(o=>`<option value="${esc(o)}" ${o==val?'selected':''}>${o===''?'（未設定／請揀）':esc(o)}</option>`).join('')}</select>`;
     else if(d.t==='area') inp=`<textarea name="${d.k}" rows="2">${esc(val)}</textarea>`;
     else if(d.t==='check') inp=`<input type="checkbox" name="${d.k}" ${val?'checked':''} style="width:auto">`;
     else inp=`<input name="${d.k}" type="${d.t||'text'}" ${d.t==='number'?'step="any" inputmode="decimal"':''} value="${esc(val)}" ${d.req?'required':''}>`;
@@ -537,11 +629,16 @@ function editInst(id){
 function bump(id){const i=S.installments.find(x=>x.id===id);i.paid=n(i.paid)+1;if(i.total&&i.paid>=i.total)i.status='已完';i.updatedAt=stamp(i.updatedAt);Sync.queue('installments',i);save();rerender(1)}
 function editWish(id){
   const w=id?S.wishlist.find(x=>x.id===id):{id:uid('w'),item:'',status:'想買',deposit:0,finalPaid:0,receivable:0,date:today()};
+  if(w.chargeAccount==null&&(w.account||w.paidFrom))w.chargeAccount=w.account||w.paidFrom;
   form(id?'修改項目':'新增 Wishlist',[{k:'item',l:'項目',req:1},{k:'status',l:'狀態',opts:WISH_ST},{k:'maker',l:'廠商'},
     {k:'price',l:'售價',t:'number'},{k:'deposit',l:'已付訂金',t:'number'},{k:'finalPaid',l:'已付尾數／全數',t:'number'},
-    {k:'store',l:'店舖',opts:shopOpts(),other:1},{k:'orderRef',l:'單號'},{k:'forWhom',l:'為誰買'},{k:'receivable',l:'應收（代付）',t:'number'},
-    {k:'receivedBack',l:'已收返應收',t:'check'},{k:'dueMonth',l:'預計發售月（YYYY-MM）'},{k:'date',l:'訂購／入帳日',t:'date'},{k:'notes',l:'備註',t:'area'}],
-    w,o=>upsertLocal('wishlist',o,!id),id?()=>tombstone('wishlist',id):null);
+    {k:'store',l:'店舖',opts:shopOpts(),other:1},{k:'orderRef',l:'單號'},{k:'forWhom',l:'為誰買'},
+    {k:'chargeAccount',l:'代付支出戶口（欠喺邊度）',opts:chargeAcctOpts()},
+    {k:'receivable',l:'應收（代付）',t:'number'},
+    {k:'receivedBack',l:'已收返應收',t:'check'},{k:'recvAccount',l:'收回入帳戶口',opts:chargeAcctOpts()},
+    {k:'recvDate',l:'收回日期',t:'date'},
+    {k:'dueMonth',l:'預計發售月（YYYY-MM）'},{k:'date',l:'訂購／入帳日',t:'date'},{k:'notes',l:'備註',t:'area'}],
+    w,o=>{upsertLocal('wishlist',o,!id);ensureRecvIncome(o)},id?()=>tombstone('wishlist',id):null);
 }
 const SAL_F=[{k:'date',l:'生效日',t:'date',req:1},{k:'company',l:'公司'},{k:'reason',l:'原因（Review／Join／Transfer…）'},{k:'label',l:'標記（例如 Year 5 (38)）'},
   {k:'annual',l:'年薪',t:'number'},{k:'monthly',l:'月薪',t:'number'},{k:'mpf',l:'MPF（每月）',t:'number'},{k:'net',l:'扣 MPF 後',t:'number'},
@@ -1094,7 +1191,7 @@ async function forceAppRefresh(){
 function settings(){
   const f=$('#dlgForm'), c=Sync.cfg();
   f.innerHTML=`<h3 style="margin:0">設定／備份</h3>
-  <div class="sub">App 程式版本：${APP_VER}（帳戶拆開循環／分期要 v21+）</div>
+  <div class="sub">App 程式版本：${APP_VER}（partner 應收明細／欠喺邊度要 v22+）</div>
   <button type="button" class="primary" id="forceRefreshBtn">🔃 強制刷新 App（拎最新版）</button>
   <button type="button" class="primary" id="expBtn">⬇️ 匯出 JSON 備份</button>
   <button type="button" id="impBtn">⬆️ 匯入 JSON</button>
