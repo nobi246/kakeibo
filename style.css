@@ -153,7 +153,7 @@ details summary{cursor:pointer;padding:6px 0}
 @media (prefers-color-scheme:dark){.warn-amber{background:#3a3115;color:#ffe08a}}
 #reserveBanner.reserve-bar{position:sticky;top:calc(env(safe-area-inset-top) + 48px);z-index:4;margin:0 0 10px;border-radius:0;padding:8px 14px;font-size:13px}
 
-/* Wishlist 發售月時間軸 + 精簡列 */
+/* 宅男 發售月時間軸 + 精簡列 */
 .wish-mo{font-size:12px;font-weight:700;color:var(--mute);margin:8px 0 2px;padding:2px 0;border-bottom:1px solid var(--line)}
 .wish-mo.now{color:var(--pri)}
 .wish-mo.past{opacity:.75}
