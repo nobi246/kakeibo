@@ -1,5 +1,5 @@
 'use strict';
-const KEY='hhledger.v1', SYNC_KEY='hhledger.sync', SYNCQ_KEY='hhledger.syncq', APP_VER='v24';
+const KEY='hhledger.v1', SYNC_KEY='hhledger.sync', SYNCQ_KEY='hhledger.syncq', APP_VER='v25';
 const TX_TYPES=['支出','收入','轉帳','分期還款'];
 const WISH_ST=['想買','落訂未收貨','收咗貨','棄單'];
 /* 常用店舖／商戶（宅男店舖、記帳對方／商戶、固定支出帳單商戶；「其他」可自由輸入並記住） */
@@ -27,7 +27,19 @@ window.toggleStoreOther=sel=>{
   else{custom.hidden=true;custom.required=false;custom.value=''}
 };
 let S=null, tab='overview', txMonth=null, wishFilter='全部', wishAnchorOnOpen=true, ovMonth=null, ovYear=null, txLimit=300, txQuery='', txKind='全部', arKind='summary', arId='';
+let tabBeforeSettings=null, settingsOpen=false, syncRerenderPending=0;
 const $=s=>document.querySelector(s);
+/* dialog 關閉後 iOS／Safari 有時會把同一個 click「穿透」去背後嘅卡片／FAB（例如總覽「每月固定支出」），造成跳 tab 甚至無限開 dialog */
+function closeDlgSafe(dlg){
+  const d=dlg||$('#dlg');
+  if(!d)return;
+  const guard=document.createElement('div');
+  guard.setAttribute('aria-hidden','true');
+  guard.style.cssText='position:fixed;inset:0;z-index:9999;background:transparent;touch-action:none';
+  document.body.appendChild(guard);
+  try{d.close()}catch(_){}
+  setTimeout(()=>{try{guard.remove()}catch(_){}},350);
+}
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const n=x=>typeof x==='number'&&isFinite(x)?x:0;
 const fmt=(x,d=2)=>x==null||x===''||isNaN(x)?'TBD':'$'+Number(x).toLocaleString('en-HK',{minimumFractionDigits:d,maximumFractionDigits:d});
@@ -284,7 +296,10 @@ function render(){
     requestAnimationFrame(()=>{const el=$('#wish-anchor-now');if(el)el.scrollIntoView({block:'start',behavior:'auto'})});
   }
 }
-function rerender(keepScroll){const y=window.scrollY;render();window.scrollTo(0,keepScroll?y:0)}
+function rerender(keepScroll){
+  if(settingsOpen&&$('#dlg')&&$('#dlg').open){syncRerenderPending=keepScroll?2:1;return}
+  const y=window.scrollY;render();window.scrollTo(0,keepScroll?y:0)
+}
 
 function vOverview(){
   const mt=monthTx(ovMonth), spend=mt.filter(isSpend).reduce((s,t)=>s+n(t.amount),0);
@@ -1256,7 +1271,7 @@ const Sync={
       const ns={...S};
       Object.keys(TABLES).forEach(k=>ns[k]=st[k]||[]);if(Array.isArray(st.categories))ns.categories=st.categories;
       if(st.meta){Object.assign(ns,st.meta.values||{});ns.metaUpdatedAt=st.meta.updatedAt}
-      S=ns;normalize();save();this.setQ([]);this.setCfg({serverTime});this.progress('');this.status(true);$('#dlg').close();rerender();alert('已由雲端下載')}
+      S=ns;normalize();save();this.setQ([]);this.setCfg({serverTime});this.progress('');this.status(true);settingsOpen=false;closeDlgSafe($('#dlg'));rerender();alert('已由雲端下載')}
     catch(e){this.progress('');this.status(false,this.errMsg(e));alert('下載失敗：'+this.errMsg(e))}
   }
 };
@@ -1273,8 +1288,10 @@ async function forceAppRefresh(){
 }
 function settings(){
   const f=$('#dlgForm'), c=Sync.cfg();
+  tabBeforeSettings=tab;
+  settingsOpen=true;
   f.innerHTML=`<h3 style="margin:0">設定／備份</h3>
-  <div class="sub">App 程式版本：${APP_VER}（記帳可填 partner 拆帳應收；宅男＋記帳合併 partner 應收要 v24+）</div>
+  <div class="sub">App 程式版本：${APP_VER}（記帳可填 partner 拆帳應收；宅男＋記帳合併 partner 應收要 v25+）</div>
   <button type="button" class="primary" id="forceRefreshBtn">🔃 強制刷新 App（拎最新版）</button>
   <button type="button" class="primary" id="expBtn">⬇️ 匯出 JSON 備份</button>
   <button type="button" id="impBtn">⬆️ 匯入 JSON</button>
@@ -1294,13 +1311,31 @@ function settings(){
   <button type="button" id="syPush">⬆️ 首次上載全部資料（覆蓋雲端）</button>
   <button type="button" id="syPull">⬇️ 由雲端下載覆蓋本機</button>
   <div class="sub" id="syncStatus">${Sync.on()?Sync.statusHtml():'未設定'}</div>
-  <div class="actions"><button value="cancel">關閉</button></div>`;
+  <div class="actions"><button type="button" id="syClose" formnovalidate>關閉</button></div>`;
   const dlg=$('#dlg');dlg.onclose=null;
+  const finishSettingsClose=()=>{
+    settingsOpen=false;
+    const prev=tabBeforeSettings;
+    tabBeforeSettings=null;
+    // 關閉後唔好留喺被 ghost-click 誤觸嘅「每月固定支出」；返回開設定前嗰個 tab／總覽
+    if(prev&&TITLES[prev]&&tab!==prev){
+      tab=prev;history.replaceState(null,'','#'+prev);
+    }
+    const pending=syncRerenderPending;syncRerenderPending=0;
+    if(pending)rerender(pending===2);
+    else rerender(1);
+  };
+  dlg.onclose=()=>{finishSettingsClose()};
+  const closeSettings=e=>{if(e){e.preventDefault();e.stopPropagation()}
+    settingsOpen=false; // 允許 close 期間嘅邏輯唔再 defer
+    closeDlgSafe(dlg);
+  };
+  $('#syClose').onclick=closeSettings;
   $('#forceRefreshBtn').onclick=()=>forceAppRefresh();
   $('#expBtn').onclick=()=>{const b=new Blob([JSON.stringify(S,null,1)],{type:'application/json'});
     const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download=`家計簿備份_${today()}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),2000)};
   $('#impBtn').onclick=()=>$('#importFile').click();
-  $('#rstBtn').onclick=async()=>{if(confirm('確定重設？本機改動會消失（建議先匯出）')){localStorage.removeItem(KEY);localStorage.removeItem(IDB_FLAG);S=null;dlg.close();await load()}};
+  $('#rstBtn').onclick=async()=>{if(confirm('確定重設？本機改動會消失（建議先匯出）')){localStorage.removeItem(KEY);localStorage.removeItem(IDB_FLAG);S=null;settingsOpen=false;dlg.onclose=null;closeDlgSafe(dlg);await load()}};
   $('#rFloorSave').onclick=()=>{const v=$('#rFloor').value.trim();
     if(v===''||isNaN(+v)){try{localStorage.removeItem('hhledger.reserveFloor')}catch(_){}toast('已重設為預設安全線（約一個月固定支出，下限 $10,000）')}
     else{lsSet('hhledger.reserveFloor',String(Math.max(0,Math.round(+v))));toast('已儲存儲備安全線 '+fmt0(+v))}
@@ -1309,13 +1344,12 @@ function settings(){
     // 網址／密碼有改先重新全量同步；唔係每次撳「立即同步」都下載晒成個資料庫
     Sync.setCfg(url!==c.url||token!==c.token?{url,token,serverTime:'',serverVersion:0}:{url,token});return !!(url&&token)};
   $('#sySave').onclick=()=>{saveCfg();$('#syncStatus').innerHTML=Sync.on()?'已儲存。撳「立即同步」試吓。':'已清除同步設定（純本機模式）';Sync.badge()};
-  $('#syNow').onclick=async()=>{saveCfg();$('#syncStatus').textContent='同步緊…';await Sync.syncNow(false);$('#syncStatus').innerHTML=Sync.statusHtml()};
-  $('#syPush').onclick=async()=>{saveCfg();$('#syncStatus').textContent='上載緊…';await Sync.pushAll();$('#syncStatus').innerHTML=Sync.statusHtml()};
+  $('#syNow').onclick=async()=>{saveCfg();$('#syncStatus').textContent='同步緊…';await Sync.syncNow(false);const el=$('#syncStatus');if(el)el.innerHTML=Sync.statusHtml()};
+  $('#syPush').onclick=async()=>{saveCfg();$('#syncStatus').textContent='上載緊…';await Sync.pushAll();const el=$('#syncStatus');if(el)el.innerHTML=Sync.statusHtml()};
   $('#syPull').onclick=async()=>{saveCfg();await Sync.pullReplace()};
+  dlg.returnValue='';
   dlg.showModal();
 }
-$('#importFile').onchange=e=>{const file=e.target.files[0];if(!file)return;const r=new FileReader();
-  r.onload=()=>{try{const d=JSON.parse(r.result);if(!d.accounts||!d.transactions)throw 0;S=d;normalize();save();$('#dlg').close();render();alert('匯入成功'+(Sync.on()?'。如要放上雲端，去設定撳「首次上載全部資料」。':''))}catch(_){alert('檔案格式唔啱')}e.target.value=''};r.readAsText(file)};
 $('#menuBtn').onclick=settings;
 document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{const next=b.dataset.tab;if(next==='wish'&&tab!=='wish')wishAnchorOnOpen=true;tab=next;history.replaceState(null,'','#'+tab);rerender()});
 {const h=location.hash.slice(1);if(TITLES[h]){tab=h;if(h==='wish')wishAnchorOnOpen=true}}
