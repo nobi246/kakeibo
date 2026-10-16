@@ -1,8 +1,8 @@
 'use strict';
-const KEY='hhledger.v1', SYNC_KEY='hhledger.sync', SYNCQ_KEY='hhledger.syncq', APP_VER='v30';
+const KEY='hhledger.v1', SYNC_KEY='hhledger.sync', SYNCQ_KEY='hhledger.syncq', APP_VER='v31';
 const TX_TYPES=['支出','收入','轉帳','分期還款'];
 const WISH_ST=['訂咗','收咗','棄單'];
-/* 常用店舖／商戶（宅男店舖、記帳對方／商戶、固定支出帳單商戶；「其他」可自由輸入並記住） */
+/* 常用店舖／商戶（宅店舖、記帳對方／商戶、固定支出帳單商戶；「其他」可自由輸入並記住） */
 const DEFAULT_STORES=['孤注一扭','FROM JAPAN','ONEMAP','Buyee','AMAZON','L Model','淘寶傲峰','玩具迷城','精品','香港玩具所','HOBBY LAND','Premium Bandai','AmiAmi','Carousell','Buy and Ship','港魂','爆米玩具','Mandarake','HKTVmall','Keeta','foodpanda','Uber Eats','PayPal','Apple','Google','YouTube','SmarTone','CMHK','HKBN','WSD','Prudential','停車場','Mum'];
 const OTHER_STORE='其他';
 function shopOpts(){
@@ -134,7 +134,7 @@ async function load(){
 function normalize(){
   ['accounts','transactions','installments','wishlist','categories','salary','forecast','bonus','archive','loans','recurring','shops'].forEach(k=>{if(!Array.isArray(S[k]))S[k]=[]});
   if(!S.burden)S.burden={};
-  // 宅男狀態遷移 → 訂咗／收咗／棄單；再按付款現實校正（仲欠／只付訂金唔可以係「收咗」）
+  // 宅狀態遷移 → 訂咗／收咗／棄單；再按付款現實校正（仲欠／只付訂金唔可以係「收咗」）
   const WISH_ST_MAP={
     '落訂未收貨':'訂咗','已付訂金':'訂咗','訂咗等拎':'訂咗','已訂':'訂咗','想買':'訂咗','訂咗':'訂咗','未俾':'訂咗',
     '收咗貨':'收咗','已買':'收咗','收咗':'收咗',
@@ -253,7 +253,7 @@ const receivable=()=>{
   const fromTx=live(S.transactions).filter(t=>n(t.partnerRecv)>0&&!t.partnerReceivedBack).reduce((s,t)=>s+n(t.partnerRecv),0);
   return fromWish+fromTx;
 };
-/* partner 應收：宅男代付 + 記帳拆帳（partnerRecv）；未收排前，再按日期新→舊 */
+/* partner 應收：宅代付 + 記帳拆帳（partnerRecv）；未收排前，再按日期新→舊 */
 const chargeAcctOf=w=>String((w&&(w.chargeAccount||w.account||w.paidFrom))||'').trim();
 const chargeAcctOpts=()=>['',...live(S.accounts).filter(a=>a.id!=='recv').map(a=>a.name)];
 function wishToRecvRow(w){
@@ -279,7 +279,7 @@ const chargeLabel=w=>{const c=chargeAcctOf(w);return c?'欠喺 '+c:'欠喺？（
 function ensureRecvIncome(w){
   if(!w)return;
   if(w.receivedBack&&n(w.receivable)>0&&w.recvAccount){
-    const desc='partner 收回：'+(w.item||'');
+    const desc='partner 收回：'+wishDisplayTitle(w);
     const d=w.recvDate||today();
     let tx=w.recvTxId?S.transactions.find(x=>x.id===w.recvTxId):null;
     if(tx&&!tx.deleted){
@@ -326,7 +326,7 @@ const monthTx=m=>live(S.transactions).filter(t=>(t.date||'').startsWith(m));
 const sheetOf=t=>(t.src||'').replace(/^xlsx:/,'').split('!')[0];
 
 /* ---------- 畫面 ---------- */
-const TITLES={overview:'總覽',tx:'記帳',accounts:'帳戶',inst:'分期',loan:'貸款',fixed:'每月固定支出',wish:'宅男',recv:'partner 應收',pay:'人工／預測',restore:'糧／復常'};
+const TITLES={overview:'總覽',tx:'記帳',accounts:'帳戶',inst:'分期',loan:'貸款',fixed:'每月固定支出',wish:'宅',recv:'partner 應收',pay:'人工／預測',restore:'糧／復常'};
 function render(){
   $('#title').textContent=TITLES[tab];
   document.querySelectorAll('.tabs button').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));
@@ -564,8 +564,8 @@ function vTx(){
   <div class="chips">${kindBtn('全部','全部帳戶')}${kindBtn('現金儲蓄','現金／儲蓄')}${kindBtn('信用卡','信用卡')}</div>
   ${txKind==='現金儲蓄'?`<div class="sub tip">💰 只睇銀行／現金／儲蓄戶口流水（唔計入卡債壓力）。HSBC 直接付款授權可之後揀住入呢度。</div>`:''}
   <div class="month"><input type="search" placeholder="搜尋（描述／分類／帳戶／Sep-25…）" value="${esc(txQuery)}" onchange="txQuery=this.value;txLimit=300;render()"></div>
-  <div class="card">${shown.length?shown.map(t=>`<div class="row" onclick="editTx('${esc(t.id)}')"><div class="l">${esc(t.desc||t.sub||t.category)}
-    <small class="note">${t.date}${t.dm?'（只知月份）':''} · ${esc(t.type)} · ${esc(t.category)} · ${esc(t.account)}${t.tag?' · '+esc(t.tag):''}${t.hist?' · 舊檔 '+esc(sheetOf(t)):''}</small></div>
+  <div class="card">${shown.length?shown.map(t=>`<div class="row" onclick="editTx('${esc(t.id)}')"><div class="l">${esc(txDisplayTitle(t))}
+    <small class="note">${t.date}${t.dm?'（只知月份）':''} · ${esc(t.type)} · ${esc(t.category)} · ${esc(t.account)}${t.counterparty?' · '+esc(t.counterparty):''}${t.tag?' · '+esc(t.tag):''}${t.hist?' · 舊檔 '+esc(sheetOf(t)):''}</small></div>
     <div class="r ${t.type==='收入'?'pos':''}">${t.type==='收入'?'+':''}${fmt(t.amount)}</div></div>`).join(''):'<div class="sub">呢個月未有紀錄。撳右下角 ＋ 記一筆。</div>'}
     ${list.length>txLimit?`<div class="actions"><button onclick="txLimit+=300;rerender(1)">顯示多 300 筆（仲有 ${list.length-txLimit} 筆）</button></div>`:''}</div>
   <button class="fab" onclick="editTx()">＋</button>`;
@@ -629,8 +629,8 @@ function vRecv(){
   const total=unpaid.reduce((s,w)=>s+n(w.receivable),0);
   const row=w=>{
     const st=w.receivedBack?'已收':'未收';
-    const srcTag=w._kind==='tx'?'記帳拆帳':'宅男';
-    return `<div class="row" onclick="openRecvItem('${esc(w.id)}','${esc(w._kind||'wish')}')"><div class="l"><b>${esc(w.item||'（未命名）')}</b>
+    const srcTag=w._kind==='tx'?'記帳拆帳':'宅';
+    return `<div class="row" onclick="openRecvItem('${esc(w.id)}','${esc(w._kind||'wish')}')"><div class="l"><b>${esc(parseShopOrderItem(w.item,w.store).title)}</b>
       <small class="note">${esc(srcTag)}${w.forWhom?' · '+esc(w.forWhom):''}${(w.store||w.orderRef)?' · ':''}${esc(w.store||'')}${w.orderRef?(w.store?' · ':'')+'#'+esc(w.orderRef):''}${w.date?' · '+esc(w.date):''}</small>
       <small class="note">${esc(chargeLabel(w))}</small></div>
       <div class="r ${w.receivedBack?'pos':''}">${fmt0(w.receivable)}<small class="note">${st}${w.receivedBack&&w.recvAccount?' → '+esc(w.recvAccount):''}</small></div></div>`;
@@ -640,7 +640,7 @@ function vRecv(){
   <div class="card"><h2>未收</h2>${unpaid.length?unpaid.map(row).join(''):'<div class="sub">全部收齊 ✓</div>'}</div>
   ${paid.length?`<div class="card"><h2>已收</h2>${paid.map(row).join('')}</div>`:''}
   <div class="actions"><button type="button" onclick="tab='overview';history.replaceState(null,'','#overview');render()">← 總覽</button>
-    <button type="button" onclick="tab='wish';history.replaceState(null,'','#wish');wishAnchorOnOpen=true;render()">← 宅男</button></div>`;
+    <button type="button" onclick="tab='wish';history.replaceState(null,'','#wish');wishAnchorOnOpen=true;render()">← 宅</button></div>`;
 }
 function openRecvItem(id,kind){
   kind=kind||'wish';
@@ -650,7 +650,7 @@ function openRecvItem(id,kind){
   const paid=!!w.receivedBack;
   const acctOpts=['',...opts].map(o=>`<option value="${esc(o)}" ${o===(w.recvAccount||'')?'selected':''}>${o?esc(o):'（請揀銀行／信用卡戶口）'}</option>`).join('');
   /* 已俾／未俾：兩掣永遠顯示，選中 .on；唔好只 render 相反嗰個 */
-  f.innerHTML=`<h3 style="margin:0">${esc(w.item||'（未命名）')}</h3>
+  f.innerHTML=`<h3 style="margin:0">${esc(wishDisplayTitle(w))}</h3>
     <div class="sub">${fmt0(w.receivable)}${w.forWhom?' · 幫 '+esc(w.forWhom):''}${w.store?' · '+esc(w.store):''}${w.orderRef?' · #'+esc(w.orderRef):''}</div>
     <div class="sub"><b>${esc(chargeLabel(w))}</b>${ch?'':' — 可撳「改資料」設代付支出戶口'}</div>
     <label>狀態（partner 已俾／未俾）
@@ -703,7 +703,7 @@ function openRecvTxItem(id){
   const paid=!!t.partnerReceivedBack;
   const acctOpts=['',...opts].map(o=>`<option value="${esc(o)}" ${o===(t.partnerRecvAccount||'')?'selected':''}>${o?esc(o):'（請揀銀行／信用卡戶口）'}</option>`).join('');
   /* 已俾／未俾：兩掣永遠顯示，選中 .on */
-  f.innerHTML=`<h3 style="margin:0">${esc(row.item||'（未命名）')}</h3>
+  f.innerHTML=`<h3 style="margin:0">${esc(parseShopOrderItem(row.item,row.store).title)}</h3>
     <div class="sub">${fmt0(row.receivable)}${row.forWhom?' · 幫 '+esc(row.forWhom):''}${row.store?' · '+esc(row.store):''} · 記帳拆帳</div>
     <div class="sub"><b>${esc(chargeLabel(row))}</b>${ch?'':' — 可撳「改資料」改支出帳戶'}</div>
     <label>狀態（partner 已俾／未俾）
@@ -750,7 +750,7 @@ function openRecvTxItem(id){
   dlg.showModal();
 }
 
-/* 宅男：按預計發售月排序（過去→而家→未來），打開時錨喺「而家」 */
+/* 宅：按預計發售月排序（過去→而家→未來），打開時錨喺「而家」 */
 /* 尾款／補款：只有年月、未知幾號 → 該月 01 置頂，標「尾款（日待定）」；知實日用 dueDate */
 function wishMonthKey(w){
   const m=String(w.dueMonth||'').trim();
@@ -827,13 +827,47 @@ function wishQuickBtns(w){
     `<button type="button" class="wish-qbtn${st===cur?' on':''}" onclick="setWishSt('${id}','${st}')">${st}</button>`
   ).join('')}</span>`;
 }
+
+/* 顯示用：項目字串常係「店舖 - 單號 #（註）產品」→ 抽出產品名做主行；raw 仍留編輯用 */
+function parseShopOrderItem(raw, storeHint){
+  const s=String(raw||'').trim();
+  if(!s) return {title:'（未命名）', raw:s};
+  const hash=s.indexOf('#');
+  if(hash>=0){
+    let after=s.slice(hash+1).trim().replace(/^\([^)]*\)\s*/,'');
+    if(after) return {title:after, raw:s};
+  }
+  const m=s.match(/^(.+?)\s*[-–—]\s*(.+)$/);
+  if(m){
+    const left=m[1].trim(), rest=m[2].trim();
+    const om=rest.match(/^(\d+(?:\s*\/\s*\d+)*)\s*(?:[-–—]\s*)?(.*)$/);
+    if(om){
+      let title=om[2].trim().replace(/^#\s*/,'').replace(/^\([^)]*\)\s*/,'');
+      if(title) return {title, raw:s};
+    }
+    const st=String(storeHint||'').trim();
+    const shopLike=st&&(left===st||left.startsWith(st)||st.startsWith(left)||left.toLowerCase().startsWith(st.toLowerCase()));
+    if(shopLike&&rest&&!/^\d+$/.test(rest)) return {title:rest, raw:s};
+    if(left.length<=18&&rest.length>2&&!/^\d+$/.test(left)&&!/^\d+$/.test(rest)) return {title:rest, raw:s};
+  }
+  return {title:s, raw:s};
+}
+function wishDisplayTitle(w){
+  if(!w) return '（未命名）';
+  return parseShopOrderItem(w.item, w.store).title;
+}
+function txDisplayTitle(t){
+  if(!t) return '（未命名）';
+  const raw=t.desc||t.sub||t.category||'';
+  return parseShopOrderItem(raw, t.counterparty).title||'（未命名）';
+}
 function wishRow(w){
   const paid=wishPaid(w), owed=wishOwed(w), info=wishDueInfo(w);
   const owedTxt=owed==null?(n(w.price)?'—':(paid?'尾款未定':'—')):fmt0(owed);
   const owedCls=owed!=null&&owed>0?'neg':(owed===0?'pos':'');
   const tbd=info&&info.dayTbd;
   const meta=tbd?`<span class="wish-tbd">尾款（日待定）</span> · ${esc(wishMonthKey(w)==='9999-99'?'未定':wishMonthKey(w))} · ${esc(w.store||'未填店舖')}`:`${esc(wishMoShort(w))} · ${esc(w.store||'未填店舖')}`;
-  return `<div class="row wish-row${tbd?' tbd':''}" onclick="editWish('${esc(w.id)}')"><div class="l"><b class="wish-name">${esc(w.item||'（未命名）')}</b><span class="wish-meta">${meta}</span>${wishQuickBtns(w)}</div><div class="r wish-money"><span>已付 ${fmt0(paid)}</span><span class="${owedCls}">仲欠 ${owedTxt}</span></div></div>`;
+  return `<div class="row wish-row${tbd?' tbd':''}" onclick="editWish('${esc(w.id)}')"><div class="l"><b class="wish-name">${esc(wishDisplayTitle(w))}</b><span class="wish-meta">${meta}</span>${wishQuickBtns(w)}</div><div class="r wish-money"><span>已付 ${fmt0(paid)}</span><span class="${owedCls}">仲欠 ${owedTxt}</span></div></div>`;
 }
 function wishUpcomingFinals(){
   const t=today(), end=addDays(t,60), nowM=curWishMonth(), nextM=addMonths(t,1).slice(0,7);
@@ -860,7 +894,7 @@ function wishUpcomingBlock(){
   const rows=items.map(w=>{
     const owed=wishOwed(w), info=wishDueInfo(w);
     const when=info?(info.dayTbd?`<span class="wish-tbd">尾款（日待定）</span> · ${esc(info.d.slice(0,7))}`:`${esc(info.d.slice(5))}（${whenTxt(info.d)}）`):esc(wishMonthKey(w)==='9999-99'?'未定':wishMonthKey(w));
-    return `<div class="row wish-row${info&&info.dayTbd?' tbd':''}" onclick="editWish('${esc(w.id)}')"><div class="l"><b class="wish-name">🎁 ${esc(w.item||'（未命名）')}</b><span class="wish-meta">${when} · ${esc(w.store||'未填店舖')}</span></div><div class="r wish-money"><span class="${owed!=null&&owed>0?'neg':''}">${owed!=null?fmt0(owed):'尾款未定'}</span></div></div>`;
+    return `<div class="row wish-row${info&&info.dayTbd?' tbd':''}" onclick="editWish('${esc(w.id)}')"><div class="l"><b class="wish-name">🎁 ${esc(wishDisplayTitle(w))}</b><span class="wish-meta">${when} · ${esc(w.store||'未填店舖')}</span></div><div class="r wish-money"><span class="${owed!=null&&owed>0?'neg':''}">${owed!=null?fmt0(owed):'尾款未定'}</span></div></div>`;
   }).join('');
   return `<div class="card wish-upcoming"><h2>⏳ 即將尾款</h2><div class="sub">未來約 60 日／本月＋下月未付 · 合共約 ${fmt0(sum)}（唔再出現喺「每月固定」）</div>${rows}</div>`;
 }
@@ -892,7 +926,7 @@ function vWish(){
   <div class="grid2"><div class="card"><h2>已付訂金</h2><div class="big">${fmt0(depositsHeld())}</div></div>
   <div class="card" onclick="tab='recv';history.replaceState(null,'','#recv');render()"><h2>partner 應收</h2><div class="big pos">${fmt0(receivable())}</div><div class="sub">撳入明細 →</div></div></div>
   ${wishUpcomingBlock()}
-  <div class="sub tip">📅 按發售月排；未知幾號嘅尾款掛該月 1 號置頂（標「日待定」）。每行狀態一律「訂咗／收咗／棄單」，撳名睇詳情。</div>
+  <div class="sub tip">📅 按發售月排；列表主行顯示產品名（店舖／單號喺第二行同編輯頁）。未知幾號嘅尾款掛該月 1 號置頂（標「日待定」）。每行狀態一律「訂咗／收咗／棄單」，撳名睇詳情。</div>
   <div class="card">${list.length?body:'<div class="sub">冇項目</div>'}</div>
   <button class="fab" onclick="editWish()">＋</button>`;
 }
@@ -1020,7 +1054,7 @@ function editWish(id){
   if(w.chargeAccount==null&&(w.account||w.paidFrom))w.chargeAccount=w.account||w.paidFrom;
   /* 日待定時唔預填 dueDate=01，避免當成實日 */
   if(wishIsDayTbd(w)) w.dueDate='';
-  form(id?'修改項目':'新增 宅男',[{k:'item',l:'項目',req:1},{k:'status',l:'狀態',opts:WISH_ST},{k:'maker',l:'廠商'},
+  form(id?'修改項目':'新增 宅',[{k:'item',l:'項目',req:1},{k:'status',l:'狀態',opts:WISH_ST},{k:'maker',l:'廠商'},
     {k:'price',l:'售價',t:'number'},{k:'deposit',l:'已付訂金',t:'number'},{k:'finalPaid',l:'已付尾數／全數',t:'number'},
     {k:'store',l:'店舖',opts:shopOpts(),other:1},{k:'orderRef',l:'單號'},{k:'forWhom',l:'為誰買'},
     {k:'chargeAccount',l:'代付支出戶口（欠喺邊度）',opts:chargeAcctOpts()},
@@ -1259,7 +1293,7 @@ const loanNext=l=>{const t=today();let m=t.slice(0,7);for(let i=0;i<3;i++){const
 function fxEvents(m){
   const ev=[];live(S.recurring).forEach(r=>rcOccur(r,m).forEach(d=>ev.push({d,name:rcName(r),amt:rcHas(r)?n(+r.hkd):null,icon:rcAdult(r)?'🔒':(r.kind==='訂閱'?CAT_ICON[r.category]||'📺':RC_ICON[r.kind]||'📦'),id:r.id,loan:0,kind:r.kind||'其他',pin:0})));
   activeLoans().forEach(l=>loanOccur(l,m).forEach(d=>ev.push({d,name:l.name,amt:n(l.monthly),icon:'💸',id:l.id,loan:1,kind:'貸款',pin:0})));
-  /* v28：玩具尾款／訂金補款只喺「宅男」tab，唔再塞入每月固定支出日曆 */
+  /* v28：玩具尾款／訂金補款只喺「宅」tab，唔再塞入每月固定支出日曆 */
   return ev.sort((a,b)=>(b.pin|0)-(a.pin|0)||a.d.localeCompare(b.d)||n(b.amt)-n(a.amt))}
 const fxKeep=e=>fxFilter==='all'?1:fxFilter==='loan'?e.loan: !e.loan;
 const FX_FILT=[['life','生活固定'],['loan','貸款分期'],['all','全部']];
@@ -1368,7 +1402,7 @@ function editRc(id){
 
 /* ---------- 雲端同步（Google Sheets，Apps Script web app） ---------- */
 const TABLES={transactions:'Transactions',accounts:'Accounts',installments:'Installments',wishlist:'Wishlist',salary:'Salary',forecast:'Forecast',bonus:'Bonus',archive:'Archive',loans:'Loans',recurring:'Recurring'};
-const TBL_LABEL={transactions:'交易',accounts:'帳戶',installments:'分期',wishlist:'宅男',salary:'人工',forecast:'預測',bonus:'花紅',archive:'舊檔',loans:'貸款',recurring:'固定支出'};
+const TBL_LABEL={transactions:'交易',accounts:'帳戶',installments:'分期',wishlist:'宅',salary:'人工',forecast:'預測',bonus:'花紅',archive:'舊檔',loans:'貸款',recurring:'固定支出'};
 const fmtInt=x=>Number(x||0).toLocaleString('en-HK');
 const syncErr=(code,extra)=>Object.assign(new Error(code),{code},extra||{});
 const Sync={
@@ -1609,7 +1643,7 @@ function settings(){
   tabBeforeSettings=tab;
   settingsOpen=true;
   f.innerHTML=`<h3 style="margin:0">設定／備份</h3>
-  <div class="sub">App 程式版本：${APP_VER}（互斥選項一律全顯示＋.on · 尾款只喺宅男；要 v30+）</div>
+  <div class="sub">App 程式版本：${APP_VER}（互斥選項一律全顯示＋.on · 尾款只喺宅；要 v31+）</div>
   <button type="button" class="primary" id="forceRefreshBtn">🔃 強制刷新 App（拎最新版）</button>
   <button type="button" class="primary" id="expBtn">⬇️ 匯出 JSON 備份</button>
   <button type="button" id="impBtn">⬆️ 匯入 JSON</button>
