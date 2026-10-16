@@ -30,6 +30,13 @@ button,.btn{font:inherit;border-radius:10px;border:1px solid var(--line);backgro
 .chips{display:flex;gap:6px;overflow-x:auto;padding:2px 0 10px}
 .chips button{white-space:nowrap;padding:6px 12px;border-radius:99px;font-size:14px}
 .chips button.on{background:var(--pri);color:#fff;border-color:var(--pri)}
+
+/* 互斥選項（form／dialog）：全部永遠顯示，選中只加 .on */
+.choice-chips{display:flex;flex-wrap:wrap;gap:6px;padding:2px 0}
+.choice-btn{appearance:none;border:1px solid var(--mute,#888);background:var(--card);color:var(--ink);font-size:13px;line-height:1.2;padding:6px 12px;border-radius:99px;cursor:pointer;opacity:.92;white-space:nowrap}
+.choice-btn.on{background:var(--pri);border-color:var(--pri);color:#fff;font-weight:600}
+.choice-btn:active{opacity:.85}
+label .choice-chips{margin-top:2px}
 dialog{border:0;border-radius:16px;padding:0;width:min(520px,94vw);background:var(--card);color:var(--ink)}
 dialog::backdrop{background:rgba(0,0,0,.4)}
 dialog form{padding:16px;display:flex;flex-direction:column;gap:10px;max-height:85vh;overflow:auto}
