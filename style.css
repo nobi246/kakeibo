@@ -173,3 +173,27 @@ details summary{cursor:pointer;padding:6px 0}
 .wish-row.tbd{background:linear-gradient(90deg,#fff8e6,transparent)}
 .tl.pin{background:#fff8e6;border-radius:10px}
 .tl.wish-due{cursor:pointer}
+
+/* ---------- 糧／復常（v27） ---------- */
+.restore-teaser{cursor:pointer;background:linear-gradient(160deg,#fff6e8 0%,var(--card) 60%);border:1px solid rgba(183,121,31,.25)}
+@media (prefers-color-scheme:dark){.restore-teaser{background:linear-gradient(160deg,#3a2e15 0%,var(--card) 60%);border-color:#5a4a22}}
+.restore-flow{display:flex;align-items:flex-end;flex-wrap:wrap;gap:8px;margin-top:6px}
+.restore-flow>div{flex:1;min-width:72px}
+.restore-flow b{display:block;font-size:20px;font-variant-numeric:tabular-nums;line-height:1.2}
+.restore-arrow{color:var(--mute);font-size:18px;padding-bottom:2px}
+.restore-left{font-weight:800;letter-spacing:.2px}
+.restore-left.amber-hi,.amber-hi{color:var(--amber)!important}
+.restore-left.neg{color:var(--warn)!important}
+.accent-num{color:var(--pri)}
+.restore-hero{background:linear-gradient(165deg,#fff8ee 0%,var(--card) 55%)}
+@media (prefers-color-scheme:dark){.restore-hero{background:linear-gradient(165deg,#2f2614 0%,var(--card) 55%)}}
+.restore-hero-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:10px 0}
+.restore-left-box{margin-top:8px;padding:14px 14px 12px;border-radius:12px;background:#fff3e0;border:2px solid var(--amber)}
+@media (prefers-color-scheme:dark){.restore-left-box{background:#3a2f14;border-color:#c9a227}}
+.restore-left-box .label{font-size:13px;font-weight:700;color:var(--amber);letter-spacing:.04em}
+.big-xxl{font-size:clamp(36px,10vw,48px);line-height:1.1;margin-top:4px}
+.restore-row.done{opacity:.72}
+.restore-row.skip{opacity:.55}
+.restore-chk{display:inline-flex;align-items:center;gap:6px;margin-top:4px;font-size:13px;color:var(--mute);cursor:pointer}
+.restore-chk input{width:auto;accent-color:var(--pri)}
+.mute{color:var(--mute)}
