@@ -168,3 +168,8 @@ details summary{cursor:pointer;padding:6px 0}
 .wish-qbtn{appearance:none;border:1px solid var(--line);background:var(--card);color:var(--fg);font-size:11px;line-height:1;padding:4px 8px;border-radius:999px;cursor:pointer}
 .wish-qbtn.pri{background:var(--pri);border-color:var(--pri);color:#fff;font-weight:600}
 .wish-qbtn:active{opacity:.85}
+
+.wish-tbd{color:var(--amber,#b8860b);font-weight:700}
+.wish-row.tbd{background:linear-gradient(90deg,#fff8e6,transparent)}
+.tl.pin{background:#fff8e6;border-radius:10px}
+.tl.wish-due{cursor:pointer}
