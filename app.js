@@ -1,5 +1,5 @@
 'use strict';
-const KEY='hhledger.v1', SYNC_KEY='hhledger.sync', SYNCQ_KEY='hhledger.syncq', APP_VER='v28';
+const KEY='hhledger.v1', SYNC_KEY='hhledger.sync', SYNCQ_KEY='hhledger.syncq', APP_VER='v29';
 const TX_TYPES=['支出','收入','轉帳','分期還款'];
 const WISH_ST=['訂咗','收咗','棄單'];
 /* 常用店舖／商戶（宅男店舖、記帳對方／商戶、固定支出帳單商戶；「其他」可自由輸入並記住） */
@@ -763,14 +763,16 @@ function setWishSt(id,st){
   const w=S.wishlist.find(x=>x.id===id); if(!w)return;
   if(w.status===st)return;
   w.status=st; w.updatedAt=stamp(w.updatedAt);
+  /* 若 chip 篩住舊狀態，改完成行會消失 → 轉返「全部」，三掣仍然見到 */
+  if(wishFilter!=='全部'&&wishFilter!==st) wishFilter='全部';
   Sync.queue('wishlist',w); save(); rerender(1); toast('已標「'+st+'」');
 }
+/* 一律三掣：訂咗／收咗／棄單。而家嗰個 .on；其餘照顯示可撳。永唔好 filter 走當前狀態。 */
 function wishQuickBtns(w){
   const cur=w.status||'', id=esc(w.id);
-  return `<span class="wish-acts" onclick="event.stopPropagation()">${WISH_ST.map(st=>{
-    const on=st===cur?' on':'';
-    return `<button type="button" class="wish-qbtn${on}" onclick="setWishSt('${id}','${st}')">${st}</button>`;
-  }).join('')}</span>`;
+  return `<span class="wish-acts" onclick="event.stopPropagation()">${WISH_ST.map(st=>
+    `<button type="button" class="wish-qbtn${st===cur?' on':''}" onclick="setWishSt('${id}','${st}')">${st}</button>`
+  ).join('')}</span>`;
 }
 function wishRow(w){
   const paid=wishPaid(w), owed=wishOwed(w), info=wishDueInfo(w);
@@ -1530,7 +1532,7 @@ function settings(){
   tabBeforeSettings=tab;
   settingsOpen=true;
   f.innerHTML=`<h3 style="margin:0">設定／備份</h3>
-  <div class="sub">App 程式版本：${APP_VER}（尾款只喺宅男 · 狀態統一訂咗／收咗／棄單；要 v28+）</div>
+  <div class="sub">App 程式版本：${APP_VER}（每行三掣永遠顯示 · 尾款只喺宅男；要 v29+）</div>
   <button type="button" class="primary" id="forceRefreshBtn">🔃 強制刷新 App（拎最新版）</button>
   <button type="button" class="primary" id="expBtn">⬇️ 匯出 JSON 備份</button>
   <button type="button" id="impBtn">⬆️ 匯入 JSON</button>

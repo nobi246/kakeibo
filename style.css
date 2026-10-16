@@ -165,7 +165,7 @@ details summary{cursor:pointer;padding:6px 0}
 .wish-row .wish-money .neg{color:#8a1f12}.wish-row .wish-money .pos{color:#145c48}
 
 .wish-acts{display:flex;flex-wrap:wrap;gap:4px;margin-top:3px}
-.wish-qbtn{appearance:none;border:1px solid var(--line);background:var(--card);color:var(--fg);font-size:11px;line-height:1;padding:4px 8px;border-radius:999px;cursor:pointer}
+.wish-qbtn{appearance:none;border:1px solid var(--mute,#888);background:var(--card);color:var(--fg);font-size:11px;line-height:1;padding:4px 8px;border-radius:999px;cursor:pointer;opacity:.92}
 .wish-qbtn.pri,.wish-qbtn.on{background:var(--pri);border-color:var(--pri);color:#fff;font-weight:600}
 .wish-upcoming{border:1px solid rgba(183,121,31,.28);background:linear-gradient(160deg,#fff8e6 0%,var(--card) 55%)}
 @media (prefers-color-scheme:dark){.wish-upcoming{background:linear-gradient(160deg,#3a2e15 0%,var(--card) 55%);border-color:#5a4a22}}
