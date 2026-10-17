@@ -1,7 +1,7 @@
 'use strict';
-const KEY='hhledger.v1', SYNC_KEY='hhledger.sync', SYNCQ_KEY='hhledger.syncq', APP_VER='v31';
+const KEY='hhledger.v1', SYNC_KEY='hhledger.sync', SYNCQ_KEY='hhledger.syncq', APP_VER='v32';
 const TX_TYPES=['支出','收入','轉帳','分期還款'];
-const WISH_ST=['訂咗','收咗','棄單'];
+const WISH_ST=['想要','訂咗','收咗','棄單'];
 /* 常用店舖／商戶（宅店舖、記帳對方／商戶、固定支出帳單商戶；「其他」可自由輸入並記住） */
 const DEFAULT_STORES=['孤注一扭','FROM JAPAN','ONEMAP','Buyee','AMAZON','L Model','淘寶傲峰','玩具迷城','精品','香港玩具所','HOBBY LAND','Premium Bandai','AmiAmi','Carousell','Buy and Ship','港魂','爆米玩具','Mandarake','HKTVmall','Keeta','foodpanda','Uber Eats','PayPal','Apple','Google','YouTube','SmarTone','CMHK','HKBN','WSD','Prudential','停車場','Mum'];
 const OTHER_STORE='其他';
@@ -136,18 +136,18 @@ function normalize(){
   if(!S.burden)S.burden={};
   // 宅狀態遷移 → 訂咗／收咗／棄單；再按付款現實校正（仲欠／只付訂金唔可以係「收咗」）
   const WISH_ST_MAP={
-    '落訂未收貨':'訂咗','已付訂金':'訂咗','訂咗等拎':'訂咗','已訂':'訂咗','想買':'訂咗','訂咗':'訂咗','未俾':'訂咗',
+    '想要':'想要','想買':'想要','願望':'想要',
+    '落訂未收貨':'訂咗','已付訂金':'訂咗','訂咗等拎':'訂咗','已訂':'訂咗','訂咗':'訂咗','未俾':'訂咗',
     '收咗貨':'收咗','已買':'收咗','收咗':'收咗',
     '棄單':'棄單','唔想要':'棄單','氣單':'棄單'
   };
   live(S.wishlist).forEach(w=>{
     const cur=w.status||'';
     let ns=WISH_ST_MAP[cur]||(WISH_ST.includes(cur)?cur:'訂咗');
-    if(ns!=='棄單'){
+    if(ns!=='棄單'&&ns!=='想要'){
       const o=wishOwed(w), dep=n(w.deposit), fp=n(w.finalPaid), price=n(w.price);
       const stillWaiting=(o!=null&&o>0)||(dep>0&&fp===0)||(dep>0&&price>0&&dep+fp<price);
       if(stillWaiting&&ns==='收咗') ns='訂咗';
-      else if(!stillWaiting&&dep===0&&fp===0&&price===0&&(cur==='想買'||!cur)) ns='訂咗';
     }
     if(ns!==cur){w.status=ns;w.updatedAt=stamp(w.updatedAt);Sync.queue('wishlist',w)}
   });
@@ -820,7 +820,7 @@ function setWishSt(id,st){
   if(wishFilter!=='全部'&&wishFilter!==st) wishFilter='全部';
   Sync.queue('wishlist',w); save(); rerender(1); toast('已標「'+st+'」');
 }
-/* 一律三掣：訂咗／收咗／棄單。而家嗰個 .on；其餘照顯示可撳。永唔好 filter 走當前狀態。 */
+/* 一律四掣：想要／訂咗／收咗／棄單。而家嗰個 .on；其餘照顯示可撳。永唔好 filter 走當前狀態。 */
 function wishQuickBtns(w){
   const cur=w.status||'', id=esc(w.id);
   return `<span class="wish-acts" onclick="event.stopPropagation()">${WISH_ST.map(st=>
@@ -866,7 +866,9 @@ function wishRow(w){
   const owedTxt=owed==null?(n(w.price)?'—':(paid?'尾款未定':'—')):fmt0(owed);
   const owedCls=owed!=null&&owed>0?'neg':(owed===0?'pos':'');
   const tbd=info&&info.dayTbd;
-  const meta=tbd?`<span class="wish-tbd">尾款（日待定）</span> · ${esc(wishMonthKey(w)==='9999-99'?'未定':wishMonthKey(w))} · ${esc(w.store||'未填店舖')}`:`${esc(wishMoShort(w))} · ${esc(w.store||'未填店舖')}`;
+  const ship=String(w.firstShip||'').trim();
+  const metaCore=tbd?`<span class="wish-tbd">尾款（日待定）</span> · ${esc(wishMonthKey(w)==='9999-99'?'未定':wishMonthKey(w))} · ${esc(w.store||'未填店舖')}`:`${esc(wishMoShort(w))} · ${esc(w.store||'未填店舖')}`;
+  const meta=ship?`${metaCore} · 首次出貨 ${esc(ship)}`:metaCore;
   return `<div class="row wish-row${tbd?' tbd':''}" onclick="editWish('${esc(w.id)}')"><div class="l"><b class="wish-name">${esc(wishDisplayTitle(w))}</b><span class="wish-meta">${meta}</span>${wishQuickBtns(w)}</div><div class="r wish-money"><span>已付 ${fmt0(paid)}</span><span class="${owedCls}">仲欠 ${owedTxt}</span></div></div>`;
 }
 function wishUpcomingFinals(){
@@ -926,7 +928,7 @@ function vWish(){
   <div class="grid2"><div class="card"><h2>已付訂金</h2><div class="big">${fmt0(depositsHeld())}</div></div>
   <div class="card" onclick="tab='recv';history.replaceState(null,'','#recv');render()"><h2>partner 應收</h2><div class="big pos">${fmt0(receivable())}</div><div class="sub">撳入明細 →</div></div></div>
   ${wishUpcomingBlock()}
-  <div class="sub tip">📅 按發售月排；列表主行顯示產品名（店舖／單號喺第二行同編輯頁）。未知幾號嘅尾款掛該月 1 號置頂（標「日待定」）。每行狀態一律「訂咗／收咗／棄單」，撳名睇詳情。</div>
+  <div class="sub tip">📅 按發售月排；列表主行顯示產品名（店舖／單號喺第二行同編輯頁）。未知幾號嘅尾款掛該月 1 號置頂（標「日待定」）。每行狀態一律「想要／訂咗／收咗／棄單」，撳名睇詳情。</div>
   <div class="card">${list.length?body:'<div class="sub">冇項目</div>'}</div>
   <button class="fab" onclick="editWish()">＋</button>`;
 }
@@ -1061,6 +1063,7 @@ function editWish(id){
     {k:'receivable',l:'應收（代付）',t:'number'},
     {k:'receivedBack',l:'已收返應收',t:'check'},{k:'recvAccount',l:'收回入帳戶口',opts:chargeAcctOpts()},
     {k:'recvDate',l:'收回日期',t:'date'},
+    {k:'firstShip',l:'第一次最快出貨／發售（原文可，例如 2027年2月発送予定）'},
     {k:'dueMonth',l:'預計發售月（YYYY-MM；未知幾號會掛 1 號置頂）'},
     {k:'dueDate',l:'尾款／到貨實日（知就填；唔知留空→該月 1 號・日待定）',t:'date'},
     {k:'date',l:'訂購／入帳日',t:'date'},{k:'notes',l:'備註',t:'area'}],
@@ -1643,7 +1646,7 @@ function settings(){
   tabBeforeSettings=tab;
   settingsOpen=true;
   f.innerHTML=`<h3 style="margin:0">設定／備份</h3>
-  <div class="sub">App 程式版本：${APP_VER}（互斥選項一律全顯示＋.on · 尾款只喺宅；要 v31+）</div>
+  <div class="sub">App 程式版本：${APP_VER}（宅四狀態含「想要」· 首次出貨欄；要 v32+）</div>
   <button type="button" class="primary" id="forceRefreshBtn">🔃 強制刷新 App（拎最新版）</button>
   <button type="button" class="primary" id="expBtn">⬇️ 匯出 JSON 備份</button>
   <button type="button" id="impBtn">⬆️ 匯入 JSON</button>
