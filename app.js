@@ -1,5 +1,5 @@
 'use strict';
-const KEY='hhledger.v1', SYNC_KEY='hhledger.sync', SYNCQ_KEY='hhledger.syncq', APP_VER='v37';
+const KEY='hhledger.v1', SYNC_KEY='hhledger.sync', SYNCQ_KEY='hhledger.syncq', APP_VER='v38';
 const TX_TYPES=['支出','收入','轉帳','分期還款'];
 const WISH_ST=['想要','訂咗','收咗','棄單'];
 /* 常用店舖／商戶（宅店舖、記帳對方／商戶、固定支出帳單商戶；「其他」可自由輸入並記住） */
@@ -842,13 +842,12 @@ function openRecvTxItem(id){
 /* 宅：按預計發售月排序（過去→而家→未來），打開時錨喺「而家」 */
 /* 尾款／補款：只有年月、未知幾號 → 該月 01 置頂，標「尾款（日待定）」；知實日用 dueDate */
 function wishMonthKey(w){
+  /* 月份分組跟 dueMonth（尾款／預計收貨月），唔跟落訂日 date */
   const m=String(w.dueMonth||'').trim();
   if(/^\d{4}-\d{2}$/.test(m)) return m;
   const dd=String(w.dueDate||'').trim();
   if(/^\d{4}-\d{2}/.test(dd)) return dd.slice(0,7);
-  const d=String(w.date||'').trim();
-  if(/^\d{4}-\d{2}/.test(d)) return d.slice(0,7);
-  return '9999-99';
+  return '9999-99'; /* 空＝未定發售月（唔好 fallback 落訂日） */
 }
 function wishMonthLabel(k){
   if(k==='9999-99') return '未定發售月';
@@ -1713,6 +1712,45 @@ const Sync={
     await this.sendPushes(pushes);
     return info;
   },
+  /* 開 App／宅 tab：全量拉 Wishlist（唔用 since／_syncedAt），按 updatedAt LWW 合併。
+     解決代理人直接改 Sheet（只 bump updatedAt）時增量 sync 睇唔到嘅問題。 */
+  async pullWishlistMerge(){
+    if(!this.on())return false;
+    if(this._wlMerging)return this._wlMerging;
+    this._wlMerging=(async()=>{
+      try{
+        const info=await this.serverInfo();
+        let rows=[];
+        if(info.paging){
+          let off=0;
+          while(off!=null){
+            const p=await this.retry(()=>this.call('GET',null,{action:'pull',table:'Wishlist',offset:off,limit:this.PAGE_ROWS},60000));
+            for(const r of (p.rows||[])) rows.push(r);
+            if(p.next!=null&&!(p.next>off)) throw syncErr('PAGING');
+            off=p.next;
+          }
+        }else{
+          const j=await this.retry(()=>this.call('GET',null,{action:'pull'},180000));
+          rows=(j.state&&j.state.wishlist)||[];
+        }
+        const prev=new Map((S.wishlist||[]).map(w=>[w.id,w]));
+        S.wishlist=this.mergeInc(S.wishlist,rows);
+        /* 雲端較新時至少確保 name／dueMonth／firstShip（mergeInc 已全筆覆蓋；呢度再保險一次） */
+        for(const r of rows){
+          const l=prev.get(r.id); if(!l) continue;
+          if((r.updatedAt||'')<(l.updatedAt||'')) continue;
+          const cur=S.wishlist.find(x=>x.id===r.id); if(!cur) continue;
+          if(r.item!=null) cur.item=r.item;
+          if(r.dueMonth!=null) cur.dueMonth=r.dueMonth;
+          if(r.firstShip!=null) cur.firstShip=r.firstShip;
+        }
+        normalize(); save();
+        return true;
+      }catch(e){this.status(false,this.errMsg(e));return false}
+      finally{this._wlMerging=null}
+    })();
+    return this._wlMerging;
+  },
   async syncNow(full){
     if(!this.on()){alert('未設定同步網址同密碼');return}
     if(this.syncing)return this.syncing;
@@ -1725,7 +1763,8 @@ const Sync={
   async auto(){
     if(!this.on()) return;
     await this.syncNow(false);
-    window.addEventListener('online',()=>this.flush());
+    await this.pullWishlistMerge();
+    window.addEventListener('online',()=>{this.flush();this.pullWishlistMerge()});
     setInterval(()=>this.flush(),60000);
   },
   metaOf(st){const v={};['version','burden','source','generatedAt','historyImport'].forEach(k=>{if(st[k]!==undefined)v[k]=st[k]});return {values:v,updatedAt:st.metaUpdatedAt||nowISO()}},
@@ -1774,7 +1813,7 @@ function settings(){
   tabBeforeSettings=tab;
   settingsOpen=true;
   f.innerHTML=`<h3 style="margin:0">設定／備份</h3>
-  <div class="sub">App 程式版本：${APP_VER}（OnPP／PP 拆帳 · 蓋章儀式；要 v37+）</div>
+  <div class="sub">App 程式版本：${APP_VER}（OnPP／PP 拆帳 · 蓋章儀式；要 v38+）</div>
   <button type="button" class="primary" id="forceRefreshBtn">🔃 強制刷新 App（拎最新版）</button>
   <button type="button" class="primary" id="expBtn">⬇️ 匯出 JSON 備份</button>
   <button type="button" id="impBtn">⬆️ 匯入 JSON</button>
@@ -1793,7 +1832,7 @@ function settings(){
   <button type="button" class="primary" id="syNow">🔄 立即同步</button>
   <button type="button" id="syPush">⬆️ 首次上載全部資料（覆蓋雲端）</button>
   <button type="button" id="syPull">⬇️ 拉雲端（覆蓋本機）</button>
-  <div class="sub">合併：邊邊 updatedAt 較新用邊邊。本機舊資料卡住時撳「拉雲端」。</div>
+  <div class="sub">合併：邊邊 updatedAt 較新用邊邊。開 App／開「宅」會自動合併雲端較新嘅 wishlist（名／發售月／出貨）。本機舊資料卡住時先至要撳「拉雲端」。</div>
   <div class="sub" id="syncStatus">${Sync.on()?Sync.statusHtml():'未設定'}</div>
   <div class="actions"><button type="button" id="syClose" formnovalidate>關閉</button></div>`;
   const dlg=$('#dlg');dlg.onclose=null;
@@ -1835,7 +1874,7 @@ function settings(){
   dlg.showModal();
 }
 $('#menuBtn').onclick=settings;
-document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{const next=b.dataset.tab;if(next==='wish'&&tab!=='wish')wishAnchorOnOpen=true;tab=next;history.replaceState(null,'','#'+tab);rerender()});
+document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{const next=b.dataset.tab;const toWish=next==='wish'&&tab!=='wish';if(toWish)wishAnchorOnOpen=true;tab=next;history.replaceState(null,'','#'+tab);rerender();if(toWish)Sync.pullWishlistMerge().then(ok=>{if(ok)rerender(1)})});
 {const h=location.hash.slice(1);if(TITLES[h]){tab=h;if(h==='wish')wishAnchorOnOpen=true}}
 if('serviceWorker' in navigator){
   navigator.serviceWorker.register('sw.js').then(reg=>{
