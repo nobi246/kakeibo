@@ -1,5 +1,5 @@
 'use strict';
-const KEY='hhledger.v1', SYNC_KEY='hhledger.sync', SYNCQ_KEY='hhledger.syncq', APP_VER='v35';
+const KEY='hhledger.v1', SYNC_KEY='hhledger.sync', SYNCQ_KEY='hhledger.syncq', APP_VER='v36';
 const TX_TYPES=['支出','收入','轉帳','分期還款'];
 const WISH_ST=['想要','訂咗','收咗','棄單'];
 /* 常用店舖／商戶（宅店舖、記帳對方／商戶、固定支出帳單商戶；「其他」可自由輸入並記住） */
@@ -317,7 +317,7 @@ function ensureTxPartnerRecv(t){
     t.partnerRecvTxId=null;t.updatedAt=stamp(t.updatedAt);Sync.queue('transactions',t);
   }
 }
-const depositsHeld=()=>live(S.wishlist).filter(w=>w.status==='訂咗'&&n(w.deposit)>0).reduce((s,w)=>s+n(w.deposit),0);
+const depositsHeld=()=>live(S.wishlist).filter(w=>w.status==='訂咗'&&n(w.deposit)>0&&!wishIsOnPPRecvOnly(w)).reduce((s,w)=>s+n(w.deposit),0);
 const isSpend=t=>t.type==='支出'||t.type==='分期還款';
 const isRefund=t=>t.type==='收入'&&t.category==='退款／代付收回';
 const OFFSET_SUB='轉做分期（抵銷全數）';
@@ -720,7 +720,7 @@ function vRecv(){
     const st=w.receivedBack?'已收':'未收';
     const srcTag=w._kind==='tx'?'記帳拆帳':'宅';
     return `<div class="row" onclick="openRecvItem('${esc(w.id)}','${esc(w._kind||'wish')}')"><div class="l"><b>${esc(parseShopOrderItem(w.item,w.store).title)}</b>
-      <small class="note">${esc(srcTag)}${w.forWhom?' · '+esc(w.forWhom):''}${(w.store||w.orderRef)?' · ':''}${esc(w.store||'')}${w.orderRef?(w.store?' · ':'')+'#'+esc(w.orderRef):''}${w.date?' · '+esc(w.date):''}</small>
+      <small class="note">${esc(srcTag)}${w.forWhom?' · '+esc(forWhomLabel(w.forWhom)):''}${(w.store||w.orderRef)?' · ':''}${esc(w.store||'')}${w.orderRef?(w.store?' · ':'')+'#'+esc(w.orderRef):''}${w.date?' · '+esc(w.date):''}</small>
       <small class="note">${esc(chargeLabel(w))}</small></div>
       <div class="r ${w.receivedBack?'pos':''}">${fmt0(w.receivable)}<small class="note">${st}${w.receivedBack&&w.recvAccount?' → '+esc(w.recvAccount):''}</small></div></div>`;
   };
@@ -740,7 +740,7 @@ function openRecvItem(id,kind){
   const acctOpts=['',...opts].map(o=>`<option value="${esc(o)}" ${o===(w.recvAccount||'')?'selected':''}>${o?esc(o):'（請揀銀行／信用卡戶口）'}</option>`).join('');
   /* 已俾／未俾：兩掣永遠顯示，選中 .on；唔好只 render 相反嗰個 */
   f.innerHTML=`<h3 style="margin:0">${esc(wishDisplayTitle(w))}</h3>
-    <div class="sub">${fmt0(w.receivable)}${w.forWhom?' · 幫 '+esc(w.forWhom):''}${w.store?' · '+esc(w.store):''}${w.orderRef?' · #'+esc(w.orderRef):''}</div>
+    <div class="sub">${fmt0(w.receivable)}${w.forWhom?' · 幫 '+esc(forWhomLabel(w.forWhom)):''}${w.store?' · '+esc(w.store):''}${w.orderRef?' · #'+esc(w.orderRef):''}</div>
     <div class="sub"><b>${esc(chargeLabel(w))}</b>${ch?'':' — 可撳「改資料」設代付支出戶口'}</div>
     <label>狀態（OnPP 已俾／未俾）
       <div class="choice-chips" id="recvPaidChips">
@@ -793,7 +793,7 @@ function openRecvTxItem(id){
   const acctOpts=['',...opts].map(o=>`<option value="${esc(o)}" ${o===(t.partnerRecvAccount||'')?'selected':''}>${o?esc(o):'（請揀銀行／信用卡戶口）'}</option>`).join('');
   /* 已俾／未俾：兩掣永遠顯示，選中 .on */
   f.innerHTML=`<h3 style="margin:0">${esc(parseShopOrderItem(row.item,row.store).title)}</h3>
-    <div class="sub">${fmt0(row.receivable)}${row.forWhom?' · 幫 '+esc(row.forWhom):''}${row.store?' · '+esc(row.store):''} · 記帳拆帳</div>
+    <div class="sub">${fmt0(row.receivable)}${row.forWhom?' · 幫 '+esc(forWhomLabel(row.forWhom)):''}${row.store?' · '+esc(row.store):''} · 記帳拆帳</div>
     <div class="sub"><b>${esc(chargeLabel(row))}</b>${ch?'':' — 可撳「改資料」改支出帳戶'}</div>
     <label>狀態（OnPP 已俾／未俾）
       <div class="choice-chips" id="recvPaidChips">
@@ -946,6 +946,22 @@ function wishDisplayTitle(w){
   if(!w) return '（未命名）';
   return parseShopOrderItem(w.item, w.store).title;
 }
+function forWhomLabel(fw){
+  const s=String(fw||'').trim();
+  if(/^partner$/i.test(s)) return 'OnPP';
+  return s;
+}
+/* OnPP／PP 純應收（如 Wilson 停車）唔霸宅列表主行；仍出現喺 OnPP 應收 */
+function wishIsOnPPRecvOnly(w){
+  if(!w||!(n(w.receivable)>0)) return false;
+  const fw=String(w.forWhom||'').trim().toLowerCase();
+  if(!['onpp','pp','partner'].includes(fw)) return false;
+  const blob=((w.item||'')+' '+(w.store||'')+' '+(w.notes||'')).toLowerCase();
+  if(/wilson|parking|停車|月租/.test(blob)) return true;
+  /* 無訂貨碼／廠商嘅代付應收亦唔當玩具主行 */
+  if(!String(w.orderRef||'').trim()&&!String(w.maker||'').trim()&&/應收|夾返|代付/.test(blob)) return true;
+  return false;
+}
 function txDisplayTitle(t){
   if(!t) return '（未命名）';
   const raw=t.desc||t.sub||t.category||'';
@@ -964,6 +980,7 @@ function wishRow(w){
 function wishUpcomingFinals(){
   const t=today(), end=addDays(t,60), nowM=curWishMonth(), nextM=addMonths(t,1).slice(0,7);
   return live(S.wishlist).filter(w=>{
+    if(wishIsOnPPRecvOnly(w)) return false;
     if(!wishPendingFinal(w)) return false;
     const info=wishDueInfo(w);
     if(!info){const k=wishMonthKey(w);return k===nowM||k===nextM}
@@ -991,7 +1008,7 @@ function wishUpcomingBlock(){
   return `<div class="card wish-upcoming"><h2>⏳ 即將尾款</h2><div class="sub">未來約 60 日／本月＋下月未付 · 合共約 ${fmt0(sum)}（唔再出現喺「每月固定」）</div>${rows}</div>`;
 }
 function vWish(){
-  const W=live(S.wishlist);
+  const W=live(S.wishlist).filter(w=>!wishIsOnPPRecvOnly(w));
   const list=W.filter(w=>wishFilter==='全部'||w.status===wishFilter)
     .slice().sort((a,b)=>{
       const ka=wishMonthKey(a),kb=wishMonthKey(b);if(ka!==kb)return ka.localeCompare(kb);
@@ -1749,7 +1766,7 @@ function settings(){
   tabBeforeSettings=tab;
   settingsOpen=true;
   f.innerHTML=`<h3 style="margin:0">設定／備份</h3>
-  <div class="sub">App 程式版本：${APP_VER}（OnPP／PP 拆帳 · 蓋章儀式；要 v35+）</div>
+  <div class="sub">App 程式版本：${APP_VER}（OnPP／PP 拆帳 · 蓋章儀式；要 v36+）</div>
   <button type="button" class="primary" id="forceRefreshBtn">🔃 強制刷新 App（拎最新版）</button>
   <button type="button" class="primary" id="expBtn">⬇️ 匯出 JSON 備份</button>
   <button type="button" id="impBtn">⬆️ 匯入 JSON</button>
