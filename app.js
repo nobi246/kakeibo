@@ -1,5 +1,5 @@
 'use strict';
-const KEY='hhledger.v1', SYNC_KEY='hhledger.sync', SYNCQ_KEY='hhledger.syncq', APP_VER='v36';
+const KEY='hhledger.v1', SYNC_KEY='hhledger.sync', SYNCQ_KEY='hhledger.syncq', APP_VER='v37';
 const TX_TYPES=['支出','收入','轉帳','分期還款'];
 const WISH_ST=['想要','訂咗','收咗','棄單'];
 /* 常用店舖／商戶（宅店舖、記帳對方／商戶、固定支出帳單商戶；「其他」可自由輸入並記住） */
@@ -70,7 +70,7 @@ function closeDlgSafe(dlg){
   setTimeout(()=>{try{guard.remove()}catch(_){}},350);
 }
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const n=x=>typeof x==='number'&&isFinite(x)?x:0;
+const n=x=>{if(typeof x==='number'&&isFinite(x))return x;if(x==null||x==='')return 0;const v=Number(String(x).replace(/,/g,''));return isFinite(v)?v:0};
 const fmt=(x,d=2)=>x==null||x===''||isNaN(x)?'TBD':'$'+Number(x).toLocaleString('en-HK',{minimumFractionDigits:d,maximumFractionDigits:d});
 const fmt0=x=>fmt(x,0);
 const pct=x=>x==null||x===''||isNaN(x)?'—':(x*100).toFixed(1)+'%';
@@ -953,10 +953,16 @@ function forWhomLabel(fw){
 }
 /* OnPP／PP 純應收（如 Wilson 停車）唔霸宅列表主行；仍出現喺 OnPP 應收 */
 function wishIsOnPPRecvOnly(w){
-  if(!w||!(n(w.receivable)>0)) return false;
+  if(!w) return false;
+  /* id／店舖先認：就算 receivable 解析怪（例如同 finalPaid 撈埋）都唔霸宅列表 */
+  const id=String(w.id||'');
+  const store=String(w.store||'');
+  if(/^w-Wilson/i.test(id)||/wilson/i.test(store)||/wilson/i.test(String(w.item||''))) return true;
+  const recv=Number(w.receivable);
+  if(!(isFinite(recv)&&recv>0)) return false;
   const fw=String(w.forWhom||'').trim().toLowerCase();
   if(!['onpp','pp','partner'].includes(fw)) return false;
-  const blob=((w.item||'')+' '+(w.store||'')+' '+(w.notes||'')).toLowerCase();
+  const blob=((w.item||'')+' '+store+' '+(w.notes||'')).toLowerCase();
   if(/wilson|parking|停車|月租/.test(blob)) return true;
   /* 無訂貨碼／廠商嘅代付應收亦唔當玩具主行 */
   if(!String(w.orderRef||'').trim()&&!String(w.maker||'').trim()&&/應收|夾返|代付/.test(blob)) return true;
@@ -1604,12 +1610,14 @@ const Sync={
     let b=$('#syncProg');
     if(msg){if(!b){b=document.createElement('div');b.id='syncProg';b.className='syncprog';b.setAttribute('role','status');document.body.appendChild(b)}b.textContent='☁︎ '+msg}
     else if(b)b.remove();
-    const bd=$('#syncBadge');if(bd&&msg)bd.textContent='☁︎⇣'},
+    const bd=$('#syncBadge');if(bd&&msg)bd.textContent=APP_VER+' ☁︎⇣'},
   status(ok,msg){const c=this.setCfg(ok?{lastSync:nowISO(),lastError:''}:{lastError:msg,lastErrorAt:nowISO()});this.badge();const el=$('#syncStatus');if(el&&!this._prog)el.innerHTML=this.statusHtml()},
   statusHtml(){const c=this.cfg(),q=this.q().length;
     return `${c.lastSync?'上次同步：'+new Date(c.lastSync).toLocaleString('zh-HK',{hour12:false}):'未同步過'}${q?` · 排緊隊：${q} 項`:''}${c.serverVersion?` · 雲端程式 v${c.serverVersion}${c.serverVersion<2?'（舊版：建議更新 Apps Script，分頁下載會穩陣好多）':''}`:''}${c.lastError?`<br><span style="color:var(--warn)">⚠️ ${esc(c.lastError)}</span>`:''}`},
-  badge(){const b=$('#syncBadge');if(!b)return;if(!this.on()){b.textContent='';return}
-    const c=this.cfg(),q=this.q().length;b.textContent=c.lastError?'☁︎⚠️':q?'☁︎'+q:'☁︎✓';b.title=c.lastError||'雲端同步'},
+  badge(){const b=$('#syncBadge');if(!b)return;const ver=APP_VER;
+    if(!this.on()){b.textContent=ver;b.title='App '+ver;return}
+    const c=this.cfg(),q=this.q().length;const sync=c.lastError?'☁︎⚠️':q?'☁︎'+q:'☁︎✓';
+    b.textContent=ver+' '+sync;b.title=(c.lastError||'雲端同步')+' · App '+ver},
   async flush(){
     if(!this.on()) return true; if(this.busy) return true; const q=this.q(); if(!q.length) return true;
     this.busy=true;
@@ -1766,7 +1774,7 @@ function settings(){
   tabBeforeSettings=tab;
   settingsOpen=true;
   f.innerHTML=`<h3 style="margin:0">設定／備份</h3>
-  <div class="sub">App 程式版本：${APP_VER}（OnPP／PP 拆帳 · 蓋章儀式；要 v36+）</div>
+  <div class="sub">App 程式版本：${APP_VER}（OnPP／PP 拆帳 · 蓋章儀式；要 v37+）</div>
   <button type="button" class="primary" id="forceRefreshBtn">🔃 強制刷新 App（拎最新版）</button>
   <button type="button" class="primary" id="expBtn">⬇️ 匯出 JSON 備份</button>
   <button type="button" id="impBtn">⬆️ 匯入 JSON</button>
@@ -1784,7 +1792,8 @@ function settings(){
   <button type="button" id="sySave">💾 儲存同步設定</button>
   <button type="button" class="primary" id="syNow">🔄 立即同步</button>
   <button type="button" id="syPush">⬆️ 首次上載全部資料（覆蓋雲端）</button>
-  <button type="button" id="syPull">⬇️ 由雲端下載覆蓋本機</button>
+  <button type="button" id="syPull">⬇️ 拉雲端（覆蓋本機）</button>
+  <div class="sub">合併：邊邊 updatedAt 較新用邊邊。本機舊資料卡住時撳「拉雲端」。</div>
   <div class="sub" id="syncStatus">${Sync.on()?Sync.statusHtml():'未設定'}</div>
   <div class="actions"><button type="button" id="syClose" formnovalidate>關閉</button></div>`;
   const dlg=$('#dlg');dlg.onclose=null;
