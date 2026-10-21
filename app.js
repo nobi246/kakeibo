@@ -1,5 +1,5 @@
 'use strict';
-const KEY='hhledger.v1', SYNC_KEY='hhledger.sync', SYNCQ_KEY='hhledger.syncq', APP_VER='v33';
+const KEY='hhledger.v1', SYNC_KEY='hhledger.sync', SYNCQ_KEY='hhledger.syncq', APP_VER='v34';
 const TX_TYPES=['支出','收入','轉帳','分期還款'];
 const WISH_ST=['想要','訂咗','收咗','棄單'];
 /* 常用店舖／商戶（宅店舖、記帳對方／商戶、固定支出帳單商戶；「其他」可自由輸入並記住） */
@@ -412,13 +412,14 @@ window.toggleRestorePartner=()=>{
 /* ---------- 每月清數儀式（restore tab；跟糧月 ym 重置） ---------- */
 const CLEARING_RITUAL_LS='hhledger.clearingRitual';
 const CLEARING_STEPS=[
-  {id:'salary777',label:'① 糧入 777',note:'糧已入 777 戶口'},
-  {id:'deductDone',label:'② 777 必扣已完成',note:'Mum／保險等 — 可對照上方必扣清單'},
-  {id:'takeCurrent',label:'③ Take／已轉 current',note:'剩錢由 777 → current（唔自動入帳）',primary:true},
-  {id:'recvOnPP',label:'④ 收 OnPP',note:'停車 $2,000／應收',linkRecv:true},
-  {id:'recvPP',label:'⑤ 收 PP',note:'儀式用；金額可選填',noteField:true},
-  {id:'cardsPaid',label:'⑥ 還卡／PPS',note:'HSBC／Citi 等'}
+  {id:'salary777',emoji:'💰',cta:'糧入咗 777？撳確認',stamp:'入咗'},
+  {id:'deductDone',emoji:'🏦',cta:'必扣搞掂？撳確認',stamp:'扣完'},
+  {id:'takeCurrent',emoji:'✨',cta:'大掣 TAKE（777→current）',stamp:'TAKE',primary:true,noteField:true,notePh:'可選備註（已轉額等）'},
+  {id:'recvOnPP',emoji:'💗',cta:'收咗 OnPP？撳確認',stamp:'收齊',linkRecv:true},
+  {id:'recvPP',emoji:'🌸',cta:'收咗 PP？撳確認',stamp:'收齊',noteField:true,notePh:'可選金額／備註'},
+  {id:'cardsPaid',emoji:'💳',cta:'卡／PPS 還咗？撳確認',stamp:'還咗'}
 ];
+let _clearingSealingId=null;
 function clearingRitualState(){
   let st={ym:SALARY_RESTORE.label,done:{},notes:{}};
   try{const j=JSON.parse(localStorage.getItem(CLEARING_RITUAL_LS)||'{}');if(j&&typeof j==='object')st=Object.assign(st,j)}catch(_){}
@@ -433,6 +434,25 @@ window.toggleClearingStep=id=>{
   st.done[id]=!st.done[id];
   clearingRitualSave(st);rerender(1);
 };
+window.confirmClearingStep=id=>{
+  const st=clearingRitualState();
+  if(st.done[id]){
+    if(!confirm('解除呢步確認？'))return;
+    st.done[id]=false;
+    clearingRitualSave(st);rerender(1);
+    return;
+  }
+  st.done[id]=true;
+  clearingRitualSave(st);
+  _clearingSealingId=id;
+  rerender(1);
+  toast('蓋章確認 ✓',1600);
+  requestAnimationFrame(()=>{
+    setTimeout(()=>{
+      if(_clearingSealingId===id){_clearingSealingId=null;rerender(1)}
+    },520);
+  });
+};
 window.setClearingNote=(id,val)=>{
   const st=clearingRitualState();
   st.notes[id]=String(val||'');
@@ -440,26 +460,40 @@ window.setClearingNote=(id,val)=>{
 };
 function clearingRitualHtml(){
   const st=clearingRitualState();
-  const allDone=CLEARING_STEPS.every(s=>!!st.done[s.id]);
-  const rows=CLEARING_STEPS.map(s=>{
+  const doneN=CLEARING_STEPS.filter(s=>!!st.done[s.id]).length;
+  const allDone=doneN===CLEARING_STEPS.length;
+  const pills=CLEARING_STEPS.map(s=>{
     const on=!!st.done[s.id];
-    if(s.primary){
-      return `<div class="row restore-row ${on?'done':''}"><div class="l"><b>${esc(s.label)}</b><small class="note">${esc(s.note)}</small>
-        <input type="text" class="ritual-note" placeholder="可選備註（已轉額等）" value="${esc(st.notes.takeCurrent||'')}" onchange="setClearingNote('takeCurrent',this.value)" onclick="event.stopPropagation()"></div>
-        <div class="r" style="white-space:normal"><button type="button" class="primary ritual-take-btn${on?' taken':''}" onclick="event.stopPropagation();toggleClearingStep('takeCurrent')">${on?'✓ 已 Take':'Take／已轉 current'}</button></div></div>`;
-    }
-    const link=s.linkRecv?`<button type="button" class="linkish" onclick="event.stopPropagation();tab='recv';history.replaceState(null,'','#recv');render()">→ 去 OnPP 應收</button>`:'';
-    const noteInp=s.noteField?`<input type="text" class="ritual-note" placeholder="可選金額／備註" value="${esc(st.notes[s.id]||'')}" onchange="setClearingNote('${esc(s.id)}',this.value)" onclick="event.stopPropagation()">`:'';
-    const chkLab=s.id==='cardsPaid'?'卡已還':'完成';
-    return `<div class="row restore-row ${on?'done':''}"><div class="l"><b>${esc(s.label)}</b><small class="note">${esc(s.note)}</small>${noteInp}${link}
-      <label class="restore-chk" onclick="event.stopPropagation()"><input type="checkbox" ${on?'checked':''} onchange="toggleClearingStep('${esc(s.id)}')"> ${chkLab}</label></div>
-      <div class="r">${on?'<span class="pill ok">✓</span>':''}</div></div>`;
+    return `<span class="ritual-pill${on?' on':''}" title="${esc(s.stamp)}">${on?esc(s.emoji):'·'}</span>`;
   }).join('');
-  const stamp=allDone?`<div class="ritual-stamp-card"><div class="ritual-stamp">本月清數完成</div><div class="sub">${esc(SALARY_RESTORE.label)} · ①–⑥ 全部剔晒</div></div>`:'';
+  const cards=CLEARING_STEPS.map(s=>{
+    const on=!!st.done[s.id];
+    const sealing=_clearingSealingId===s.id;
+    const noteInp=s.noteField?`<input type="text" class="ritual-note" placeholder="${esc(s.notePh||'可選備註')}" value="${esc(st.notes[s.id]||'')}" onchange="setClearingNote('${esc(s.id)}',this.value)" onclick="event.stopPropagation()">`:'';
+    const link=s.linkRecv?`<button type="button" class="linkish" onclick="event.stopPropagation();tab='recv';history.replaceState(null,'','#recv');render()">去 OnPP 應收</button>`:'';
+    const stampCls=`ritual-rubber${sealing?' sealing':''}`;
+    return `<button type="button" class="ritual-step${on?' done':''}${s.primary?' primary-take':''}${sealing?' sealing':''}" onclick="confirmClearingStep('${esc(s.id)}')" aria-pressed="${on?'true':'false'}">
+      <span class="ritual-emoji">${esc(s.emoji)}</span>
+      <span class="ritual-body">
+        <span class="ritual-cta">${on?'已確認 · 再撳可解除':esc(s.cta)}</span>
+        ${noteInp}${link}
+      </span>
+      <span class="${stampCls}" aria-hidden="true">${esc(s.stamp)}</span>
+    </button>`;
+  }).join('');
+  const finale=allDone?`<div class="ritual-finale" aria-live="polite">
+      <span class="ritual-sparkle s1">✨</span><span class="ritual-sparkle s2">💫</span><span class="ritual-sparkle s3">🌟</span>
+      <span class="ritual-sparkle s4">💗</span><span class="ritual-sparkle s5">🌸</span>
+      <div class="ritual-complete-stamp">本月清數完成</div>
+      <div class="sub">${esc(SALARY_RESTORE.label)} · 六步全部蓋章啦</div>
+    </div>`:'';
   return `<div class="card ritual-card">
     <h2>清數儀式</h2>
-    <div class="sub tip">跟糧月 ${esc(SALARY_RESTORE.label)} · 換月自動重置（唔自動寫入帳）</div>
-    ${rows}${stamp}</div>`;
+    <div class="sub tip">每步撳一下蓋章確認 · 再撳可解除</div>
+    <div class="ritual-progress"><span class="ritual-count">${doneN}／6</span>${pills}</div>
+    <div class="ritual-steps">${cards}</div>
+    ${finale}
+  </div>`;
 }
 
 function salaryRestoreTeaserHtml(){
@@ -1714,7 +1748,7 @@ function settings(){
   tabBeforeSettings=tab;
   settingsOpen=true;
   f.innerHTML=`<h3 style="margin:0">設定／備份</h3>
-  <div class="sub">App 程式版本：${APP_VER}（OnPP／PP 拆帳 · 清數儀式；要 v33+）</div>
+  <div class="sub">App 程式版本：${APP_VER}（OnPP／PP 拆帳 · 蓋章儀式；要 v34+）</div>
   <button type="button" class="primary" id="forceRefreshBtn">🔃 強制刷新 App（拎最新版）</button>
   <button type="button" class="primary" id="expBtn">⬇️ 匯出 JSON 備份</button>
   <button type="button" id="impBtn">⬆️ 匯入 JSON</button>
