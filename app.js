@@ -1,5 +1,5 @@
 'use strict';
-const KEY='hhledger.v1', SYNC_KEY='hhledger.sync', SYNCQ_KEY='hhledger.syncq', APP_VER='v34';
+const KEY='hhledger.v1', SYNC_KEY='hhledger.sync', SYNCQ_KEY='hhledger.syncq', APP_VER='v35';
 const TX_TYPES=['支出','收入','轉帳','分期還款'];
 const WISH_ST=['想要','訂咗','收咗','棄單'];
 /* 常用店舖／商戶（宅店舖、記帳對方／商戶、固定支出帳單商戶；「其他」可自由輸入並記住） */
@@ -926,7 +926,8 @@ function parseShopOrderItem(raw, storeHint){
     let after=s.slice(hash+1).trim().replace(/^\([^)]*\)\s*/,'');
     if(after) return {title:after, raw:s};
   }
-  const m=s.match(/^(.+?)\s*[-–—]\s*(.+)$/);
+  /* require spaces around dash so names like J-Decker are not split */
+  const m=s.match(/^(.+?)\s+[-–—]\s+(.+)$/);
   if(m){
     const left=m[1].trim(), rest=m[2].trim();
     const om=rest.match(/^(\d+(?:\s*\/\s*\d+)*)\s*(?:[-–—]\s*)?(.*)$/);
@@ -1748,7 +1749,7 @@ function settings(){
   tabBeforeSettings=tab;
   settingsOpen=true;
   f.innerHTML=`<h3 style="margin:0">設定／備份</h3>
-  <div class="sub">App 程式版本：${APP_VER}（OnPP／PP 拆帳 · 蓋章儀式；要 v34+）</div>
+  <div class="sub">App 程式版本：${APP_VER}（OnPP／PP 拆帳 · 蓋章儀式；要 v35+）</div>
   <button type="button" class="primary" id="forceRefreshBtn">🔃 強制刷新 App（拎最新版）</button>
   <button type="button" class="primary" id="expBtn">⬇️ 匯出 JSON 備份</button>
   <button type="button" id="impBtn">⬆️ 匯入 JSON</button>
