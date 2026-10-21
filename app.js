@@ -1,5 +1,5 @@
 'use strict';
-const KEY='hhledger.v1', SYNC_KEY='hhledger.sync', SYNCQ_KEY='hhledger.syncq', APP_VER='v32';
+const KEY='hhledger.v1', SYNC_KEY='hhledger.sync', SYNCQ_KEY='hhledger.syncq', APP_VER='v33';
 const TX_TYPES=['支出','收入','轉帳','分期還款'];
 const WISH_ST=['想要','訂咗','收咗','棄單'];
 /* 常用店舖／商戶（宅店舖、記帳對方／商戶、固定支出帳單商戶；「其他」可自由輸入並記住） */
@@ -28,7 +28,7 @@ window.toggleStoreOther=sel=>{
 };
 /* 互斥選項 UI：一律全部顯示，選中只加 .on；永唔好 filter 走當前／只 render 未選。 */
 const CHIP_OPT_MAX=8;
-const shouldChipOpts=d=>!!(d&&d.opts)&&!d.other&&(!!d.chips||d.k==='status'||((d.opts.length<=CHIP_OPT_MAX)&&!d.opts.some(o=>String(o||'').length>24)));
+const shouldChipOpts=d=>!!(d&&d.opts)&&(!!d.chips||(!d.other&&(d.k==='status'||((d.opts.length<=CHIP_OPT_MAX)&&!d.opts.some(o=>String(o||'').length>24)))));
 function choiceChipsHtml(opts,cur,{name,cls,btnCls,emptyLab}={}){
   const lab=v=>(v===''||v==null)?(emptyLab||'（未設定）'):String(v);
   const curS=cur==null?'':String(cur);
@@ -279,14 +279,14 @@ const chargeLabel=w=>{const c=chargeAcctOf(w);return c?'欠喺 '+c:'欠喺？（
 function ensureRecvIncome(w){
   if(!w)return;
   if(w.receivedBack&&n(w.receivable)>0&&w.recvAccount){
-    const desc='partner 收回：'+wishDisplayTitle(w);
+    const desc='OnPP 收回：'+wishDisplayTitle(w);
     const d=w.recvDate||today();
     let tx=w.recvTxId?S.transactions.find(x=>x.id===w.recvTxId):null;
     if(tx&&!tx.deleted){
       tx.type='收入';tx.category='退款／代付收回';tx.account=w.recvAccount;tx.amount=n(w.receivable);
       tx.desc=desc;tx.date=d;tx.updatedAt=stamp(tx.updatedAt);Sync.queue('transactions',tx);
     }else{
-      const nw={id:uid('t'),date:d,type:'收入',category:'退款／代付收回',account:w.recvAccount,amount:n(w.receivable),desc,notes:'由 partner 應收自動入帳',updatedAt:stamp()};
+      const nw={id:uid('t'),date:d,type:'收入',category:'退款／代付收回',account:w.recvAccount,amount:n(w.receivable),desc,notes:'由 OnPP 應收自動入帳',updatedAt:stamp()};
       S.transactions.push(nw);Sync.queue('transactions',nw);
       w.recvTxId=nw.id;w.updatedAt=stamp(w.updatedAt);Sync.queue('wishlist',w);
     }
@@ -300,14 +300,14 @@ function ensureRecvIncome(w){
 function ensureTxPartnerRecv(t){
   if(!t)return;
   if(t.partnerReceivedBack&&n(t.partnerRecv)>0&&t.partnerRecvAccount){
-    const desc='partner 收回：'+(t.desc||t.counterparty||t.category||'記帳拆帳');
+    const desc='OnPP 收回：'+(t.desc||t.counterparty||t.category||'記帳拆帳');
     const d=t.partnerRecvDate||today();
     let income=t.partnerRecvTxId?S.transactions.find(x=>x.id===t.partnerRecvTxId):null;
     if(income&&!income.deleted){
       income.type='收入';income.category='退款／代付收回';income.account=t.partnerRecvAccount;income.amount=n(t.partnerRecv);
       income.desc=desc;income.date=d;income.updatedAt=stamp(income.updatedAt);Sync.queue('transactions',income);
     }else{
-      const nw={id:uid('t'),date:d,type:'收入',category:'退款／代付收回',account:t.partnerRecvAccount,amount:n(t.partnerRecv),desc,notes:'由記帳拆帳 partner 應收自動入帳',updatedAt:stamp()};
+      const nw={id:uid('t'),date:d,type:'收入',category:'退款／代付收回',account:t.partnerRecvAccount,amount:n(t.partnerRecv),desc,notes:'由記帳拆帳 OnPP 應收自動入帳',updatedAt:stamp()};
       S.transactions.push(nw);Sync.queue('transactions',nw);
       t.partnerRecvTxId=nw.id;t.updatedAt=stamp(t.updatedAt);Sync.queue('transactions',t);
     }
@@ -326,7 +326,7 @@ const monthTx=m=>live(S.transactions).filter(t=>(t.date||'').startsWith(m));
 const sheetOf=t=>(t.src||'').replace(/^xlsx:/,'').split('!')[0];
 
 /* ---------- 畫面 ---------- */
-const TITLES={overview:'總覽',tx:'記帳',accounts:'帳戶',inst:'分期',loan:'貸款',fixed:'每月固定支出',wish:'宅',recv:'partner 應收',pay:'人工／預測',restore:'糧／復常'};
+const TITLES={overview:'總覽',tx:'記帳',accounts:'帳戶',inst:'分期',loan:'貸款',fixed:'每月固定支出',wish:'宅',recv:'OnPP 應收',pay:'人工／預測',restore:'糧／復常'};
 function render(){
   $('#title').textContent=TITLES[tab];
   document.querySelectorAll('.tabs button').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));
@@ -351,7 +351,7 @@ const SALARY_RESTORE={
   label:'2026-10',
   asOf:'2026-10-15',
   salary:35100,
-  partnerParking:2000, // partner 停車應收／月（由今次）
+  partnerParking:2000, // OnPP 停車應收／月（由今次）
   noteCardInst:'卡分期（Citi ≈$6,281／月 · HSBC ≈$1,827／月）已入卡結單，唔好再用糧重複付。',
   plans:{
     A:{id:'A',name:'復常（建議）',hsbcAmt:13778.74,hsbcLabel:'HSBC 結單全數'},
@@ -408,6 +408,60 @@ window.toggleRestorePartner=()=>{
   st.partnerOn=!st.partnerOn;
   salaryRestoreSave(st);rerender(1);
 };
+
+/* ---------- 每月清數儀式（restore tab；跟糧月 ym 重置） ---------- */
+const CLEARING_RITUAL_LS='hhledger.clearingRitual';
+const CLEARING_STEPS=[
+  {id:'salary777',label:'① 糧入 777',note:'糧已入 777 戶口'},
+  {id:'deductDone',label:'② 777 必扣已完成',note:'Mum／保險等 — 可對照上方必扣清單'},
+  {id:'takeCurrent',label:'③ Take／已轉 current',note:'剩錢由 777 → current（唔自動入帳）',primary:true},
+  {id:'recvOnPP',label:'④ 收 OnPP',note:'停車 $2,000／應收',linkRecv:true},
+  {id:'recvPP',label:'⑤ 收 PP',note:'儀式用；金額可選填',noteField:true},
+  {id:'cardsPaid',label:'⑥ 還卡／PPS',note:'HSBC／Citi 等'}
+];
+function clearingRitualState(){
+  let st={ym:SALARY_RESTORE.label,done:{},notes:{}};
+  try{const j=JSON.parse(localStorage.getItem(CLEARING_RITUAL_LS)||'{}');if(j&&typeof j==='object')st=Object.assign(st,j)}catch(_){}
+  if(st.ym!==SALARY_RESTORE.label){st.ym=SALARY_RESTORE.label;st.done={};st.notes={}}
+  if(!st.done||typeof st.done!=='object')st.done={};
+  if(!st.notes||typeof st.notes!=='object')st.notes={};
+  return st;
+}
+function clearingRitualSave(st){try{localStorage.setItem(CLEARING_RITUAL_LS,JSON.stringify(st))}catch(_){}}
+window.toggleClearingStep=id=>{
+  const st=clearingRitualState();
+  st.done[id]=!st.done[id];
+  clearingRitualSave(st);rerender(1);
+};
+window.setClearingNote=(id,val)=>{
+  const st=clearingRitualState();
+  st.notes[id]=String(val||'');
+  clearingRitualSave(st);
+};
+function clearingRitualHtml(){
+  const st=clearingRitualState();
+  const allDone=CLEARING_STEPS.every(s=>!!st.done[s.id]);
+  const rows=CLEARING_STEPS.map(s=>{
+    const on=!!st.done[s.id];
+    if(s.primary){
+      return `<div class="row restore-row ${on?'done':''}"><div class="l"><b>${esc(s.label)}</b><small class="note">${esc(s.note)}</small>
+        <input type="text" class="ritual-note" placeholder="可選備註（已轉額等）" value="${esc(st.notes.takeCurrent||'')}" onchange="setClearingNote('takeCurrent',this.value)" onclick="event.stopPropagation()"></div>
+        <div class="r" style="white-space:normal"><button type="button" class="primary ritual-take-btn${on?' taken':''}" onclick="event.stopPropagation();toggleClearingStep('takeCurrent')">${on?'✓ 已 Take':'Take／已轉 current'}</button></div></div>`;
+    }
+    const link=s.linkRecv?`<button type="button" class="linkish" onclick="event.stopPropagation();tab='recv';history.replaceState(null,'','#recv');render()">→ 去 OnPP 應收</button>`:'';
+    const noteInp=s.noteField?`<input type="text" class="ritual-note" placeholder="可選金額／備註" value="${esc(st.notes[s.id]||'')}" onchange="setClearingNote('${esc(s.id)}',this.value)" onclick="event.stopPropagation()">`:'';
+    const chkLab=s.id==='cardsPaid'?'卡已還':'完成';
+    return `<div class="row restore-row ${on?'done':''}"><div class="l"><b>${esc(s.label)}</b><small class="note">${esc(s.note)}</small>${noteInp}${link}
+      <label class="restore-chk" onclick="event.stopPropagation()"><input type="checkbox" ${on?'checked':''} onchange="toggleClearingStep('${esc(s.id)}')"> ${chkLab}</label></div>
+      <div class="r">${on?'<span class="pill ok">✓</span>':''}</div></div>`;
+  }).join('');
+  const stamp=allDone?`<div class="ritual-stamp-card"><div class="ritual-stamp">本月清數完成</div><div class="sub">${esc(SALARY_RESTORE.label)} · ①–⑥ 全部剔晒</div></div>`:'';
+  return `<div class="card ritual-card">
+    <h2>清數儀式</h2>
+    <div class="sub tip">跟糧月 ${esc(SALARY_RESTORE.label)} · 換月自動重置（唔自動寫入帳）</div>
+    ${rows}${stamp}</div>`;
+}
+
 function salaryRestoreTeaserHtml(){
   const st=salaryRestoreState(), c=salaryRestoreCalc(st);
   const leftCls=c.left<5000?'neg':(c.left<12000?'amber-hi':'pos');
@@ -420,7 +474,7 @@ function salaryRestoreTeaserHtml(){
       <span class="restore-arrow">→</span>
       <div><small class="note">剩可用</small><b class="restore-left ${leftCls}">${fmt0(c.left)}</b></div>
     </div>
-    <div class="sub" style="margin-top:8px">${c.partner?`含 partner 停車 +${fmt0(c.partner)} · `:''}方案 ${esc(c.plan.name)} · 撳入必扣清單 →</div>
+    <div class="sub" style="margin-top:8px">${c.partner?`含 OnPP 停車 +${fmt0(c.partner)} · `:''}方案 ${esc(c.plan.name)} · 撳入必扣清單 →</div>
   </div>`;
 }
 function vRestore(){
@@ -448,7 +502,7 @@ function vRestore(){
     <div class="restore-left-box">
       <div class="label">剩可用（小心使）</div>
       <div class="big big-xxl restore-left ${leftCls}">${fmt0(c.left)}</div>
-      <div class="sub">${c.partner?`已計 partner 停車 +${fmt0(c.partner)}`:''}${c.left<12000?' · 數字大＝提醒你慳使':''}</div>
+      <div class="sub">${c.partner?`已計 OnPP 停車 +${fmt0(c.partner)}`:''}${c.left<12000?' · 數字大＝提醒你慳使':''}</div>
     </div>
   </div>
   <div class="card">
@@ -466,11 +520,12 @@ function vRestore(){
     <div class="sub" style="margin-top:8px">${esc(R.noteCardInst)}</div>
   </div>
   <div class="card">
-    <h2>partner 停車應收</h2>
+    <h2>OnPP 停車應收</h2>
     <div class="row"><div class="l"><b>每月 $2,000</b><small class="note">由今次起 · 作收入／減輕糧壓</small>
       <label class="restore-chk"><input type="checkbox" ${st.partnerOn?'checked':''} onchange="toggleRestorePartner()"> 計入剩可用</label></div>
       <div class="r pos">+${fmt0(R.partnerParking)}</div></div>
   </div>
+  ${clearingRitualHtml()}
   <div class="card">
     <h2>「復常」定義</h2>
     <div class="sub">今個月：卡唔逾期、HSBC 最低（最好結單）準時、屋企同保險唔斷、CNCBI 準時；Citi 循環保持 $0；唔再滾新循環；扣完仲有生活錢去到月底。</div>
@@ -526,7 +581,7 @@ function vOverview(){
   </div>
   ${live(S.recurring).length?(()=>{const f=fxStats();return `<div class="card" onclick="tab='fixed';history.replaceState(null,'','#fixed');render()"><h2>📌 每月固定支出</h2><div class="big">${fmt0(f.total)}</div><div class="sub">💸 貸款／分期 ${fmt0(f.loans)} + 📺 其他 ${fmt0(f.other)}（訂閱 ${fmt0(f.subs)}）→</div></div>`})():''}
   <div class="grid2">
-    <div class="card" onclick="tab='recv';history.replaceState(null,'','#recv');render()"><h2>partner 應收</h2><div class="big pos">${fmt0(receivable())}</div><div class="sub">代付待收 · 撳入睇明細 →</div></div>
+    <div class="card" onclick="tab='recv';history.replaceState(null,'','#recv');render()"><h2>OnPP 應收</h2><div class="big pos">${fmt0(receivable())}</div><div class="sub">代付待收 · 撳入睇明細 →</div></div>
     <div class="card"><h2>已付訂金（未到貨）</h2><div class="big">${fmt0(depositsHeld())}</div><div class="sub">訂金已付、尾數未找</div></div>
   </div>
   <div class="card"><h2>本月分類支出</h2>${Object.keys(byCat).length?Object.entries(byCat).sort((a,b)=>b[1]-a[1]).map(([c,v])=>`<div class="row"><div class="l">${esc(c)}</div><div class="r">${fmt(v)}</div></div>`).join(''):'<div class="sub">本月未有支出紀錄 — 去「記帳」加一筆。</div>'}</div>
@@ -653,13 +708,13 @@ function openRecvItem(id,kind){
   f.innerHTML=`<h3 style="margin:0">${esc(wishDisplayTitle(w))}</h3>
     <div class="sub">${fmt0(w.receivable)}${w.forWhom?' · 幫 '+esc(w.forWhom):''}${w.store?' · '+esc(w.store):''}${w.orderRef?' · #'+esc(w.orderRef):''}</div>
     <div class="sub"><b>${esc(chargeLabel(w))}</b>${ch?'':' — 可撳「改資料」設代付支出戶口'}</div>
-    <label>狀態（partner 已俾／未俾）
+    <label>狀態（OnPP 已俾／未俾）
       <div class="choice-chips" id="recvPaidChips">
         <button type="button" class="choice-btn${!paid?' on':''}" data-v="0">未俾</button>
         <button type="button" class="choice-btn${paid?' on':''}" data-v="1">已俾</button>
       </div>
     </label>
-    <label>收回入帳戶口（partner 已俾入邊度）<select id="recvAcctSel" name="recvAccount">${acctOpts}</select></label>
+    <label>收回入帳戶口（OnPP 已俾入邊度）<select id="recvAcctSel" name="recvAccount">${acctOpts}</select></label>
     <label>收回日期<input name="recvDate" id="recvDateInp" type="date" value="${esc(w.recvDate||today())}"></label>
     <div class="sub">標「已俾」會自動加／更新一筆收入：分類「退款／代付收回」${paid&&w.recvAccount?' · 而家 → '+esc(w.recvAccount):''}</div>
     <div class="actions"><button value="cancel" formnovalidate>關閉</button>
@@ -706,13 +761,13 @@ function openRecvTxItem(id){
   f.innerHTML=`<h3 style="margin:0">${esc(parseShopOrderItem(row.item,row.store).title)}</h3>
     <div class="sub">${fmt0(row.receivable)}${row.forWhom?' · 幫 '+esc(row.forWhom):''}${row.store?' · '+esc(row.store):''} · 記帳拆帳</div>
     <div class="sub"><b>${esc(chargeLabel(row))}</b>${ch?'':' — 可撳「改資料」改支出帳戶'}</div>
-    <label>狀態（partner 已俾／未俾）
+    <label>狀態（OnPP 已俾／未俾）
       <div class="choice-chips" id="recvPaidChips">
         <button type="button" class="choice-btn${!paid?' on':''}" data-v="0">未俾</button>
         <button type="button" class="choice-btn${paid?' on':''}" data-v="1">已俾</button>
       </div>
     </label>
-    <label>收回入帳戶口（partner 已俾入邊度）<select id="recvAcctSel" name="recvAccount">${acctOpts}</select></label>
+    <label>收回入帳戶口（OnPP 已俾入邊度）<select id="recvAcctSel" name="recvAccount">${acctOpts}</select></label>
     <label>收回日期<input name="recvDate" id="recvDateInp" type="date" value="${esc(t.partnerRecvDate||today())}"></label>
     <div class="sub">標「已俾」會自動加／更新一筆收入：分類「退款／代付收回」${paid&&t.partnerRecvAccount?' · 而家 → '+esc(t.partnerRecvAccount):''}</div>
     <div class="actions"><button value="cancel" formnovalidate>關閉</button>
@@ -926,7 +981,7 @@ function vWish(){
   if(!anchored) body+=mark();
   return `<div class="chips">${['全部',...WISH_ST].map(s=>`<button class="${s===wishFilter?'on':''}" onclick="wishFilter='${s}';wishAnchorOnOpen=true;render()">${s} ${cnt(s)}</button>`).join('')}</div>
   <div class="grid2"><div class="card"><h2>已付訂金</h2><div class="big">${fmt0(depositsHeld())}</div></div>
-  <div class="card" onclick="tab='recv';history.replaceState(null,'','#recv');render()"><h2>partner 應收</h2><div class="big pos">${fmt0(receivable())}</div><div class="sub">撳入明細 →</div></div></div>
+  <div class="card" onclick="tab='recv';history.replaceState(null,'','#recv');render()"><h2>OnPP 應收</h2><div class="big pos">${fmt0(receivable())}</div><div class="sub">撳入明細 →</div></div></div>
   ${wishUpcomingBlock()}
   <div class="sub tip">📅 按發售月排；列表主行顯示產品名（店舖／單號喺第二行同編輯頁）。未知幾號嘅尾款掛該月 1 號置頂（標「日待定」）。每行狀態一律「想要／訂咗／收咗／棄單」，撳名睇詳情。</div>
   <div class="card">${list.length?body:'<div class="sub">冇項目</div>'}</div>
@@ -973,7 +1028,7 @@ function form(title,fields,obj,onSave,onDel){
   f.innerHTML=`<h3 style="margin:0">${esc(title)}</h3>`+fields.map(d=>{
     const val=obj[d.k]??'';
     let inp;
-    if(d.opts&&d.other){
+    if(d.opts&&d.other&&!shouldChipOpts(d)){
       const opts=[...new Set((d.opts||[]).filter(Boolean))];
       const inList=val!==''&&val!=null&&opts.includes(val);
       const useOther=val!==''&&val!=null&&!inList;
@@ -984,9 +1039,14 @@ function form(title,fields,obj,onSave,onDel){
         `<option value="${OTHER_STORE}" ${useOther?'selected':''}>${OTHER_STORE}</option></select>`+
         `<input name="${d.k}__custom" type="text" placeholder="輸入自訂店舖／商戶名" value="${useOther?esc(val):''}" ${useOther?'':'hidden'} style="margin-top:6px">`;
     }else if(d.opts&&shouldChipOpts(d)){
-      const opts=[...new Set([...(d.opts),...(val!==''&&val!=null&&!d.opts.includes(val)?[val]:[])])];
+      const base=[...new Set((d.opts||[]).filter(o=>o!=null&&String(o)!==''))];
+      const opts=[...new Set([...base,...(val!==''&&val!=null&&!base.includes(val)?[val]:[])])];
       /* 狀態／短枚舉：chips 一律全部顯示，選中 .on（唔用 select 收埋） */
       inp=choiceChipsHtml(opts,val,{name:d.k,emptyLab:'（未設定／請揀）'});
+      if(d.other){
+        const useOther=val!==''&&val!=null&&!base.includes(String(val));
+        inp+=`<input name="${d.k}__custom" type="text" placeholder="或其他名字" value="${useOther?esc(val):''}" style="margin-top:6px">`;
+      }
     }else if(d.opts) inp=`<select name="${d.k}">${[...new Set([...(d.opts),...(val!==''&&val!=null&&!d.opts.includes(val)?[val]:[])])].map(o=>`<option value="${esc(o)}" ${o==val?'selected':''}>${o===''?'（未設定／請揀）':esc(o)}</option>`).join('')}</select>`;
     else if(d.t==='area') inp=`<textarea name="${d.k}" rows="2">${esc(val)}</textarea>`;
     else if(d.t==='check') inp=`<input type="checkbox" name="${d.k}" ${val?'checked':''} style="width:auto">`;
@@ -1000,7 +1060,10 @@ function form(title,fields,obj,onSave,onDel){
     if(dlg.returnValue!=='ok') return;
     const fd=new FormData(f);
     fields.forEach(d=>{let v=fd.get(d.k);
-      if(d.other&&v===OTHER_STORE){v=String(fd.get(d.k+'__custom')||'').trim();rememberShop(v)}
+      if(d.other&&shouldChipOpts(d)){
+        const custom=String(fd.get(d.k+'__custom')||'').trim();
+        if(custom) v=custom;
+      }else if(d.other&&v===OTHER_STORE){v=String(fd.get(d.k+'__custom')||'').trim();rememberShop(v)}
       else if(d.other&&v) rememberShop(v);
       if(d.t==='check') v=!!v; else if(d.t==='number') v=(v===''||v==null)?null:Number(v);
       obj[d.k]=v});
@@ -1008,7 +1071,12 @@ function form(title,fields,obj,onSave,onDel){
     onSave(obj);save();rerender(1);
   };
   dlg.returnValue='';dlg.showModal();
-  bindChoiceChips(f);
+  bindChoiceChips(f,(v,box)=>{
+    const hid=box.querySelector('input[type="hidden"]');
+    if(!hid||!hid.name)return;
+    const custom=f.querySelector('[name="'+hid.name+'__custom"]');
+    if(custom)custom.value='';
+  });
 }
 /* 新增／修改／刪除（刪除＝墓碑 deleted:true，方便同步合併） */
 function upsertLocal(key,o,isNew){if(isNew)S[key].push(o);Sync.queue(key,o)}
@@ -1019,8 +1087,8 @@ function editTx(id){
   const t=id?S.transactions.find(x=>x.id===id):{id:uid('t'),date:today(),type:'支出',category:'餐飲',account:'Citibank VISA',amount:null,partnerRecv:null,partnerFor:''};
   form(id?'修改紀錄':'記一筆',[
     {k:'date',l:'日期',t:'date',req:1},{k:'type',l:'類型',opts:TX_TYPES},{k:'amount',l:'金額（HKD）',t:'number',req:1},
-    {k:'partnerRecv',l:'partner 應收（拆帳金額）',t:'number'},
-    {k:'partnerFor',l:'為誰（拆帳）'},
+    {k:'partnerRecv',l:'OnPP 應收（拆帳金額）',t:'number'},
+    {k:'partnerFor',l:'為誰（拆帳）',opts:['OnPP','PP'],chips:1,other:1},
     {k:'category',l:'分類',opts:S.categories},{k:'sub',l:'細項'},{k:'account',l:'帳戶',opts:acctNames()},
     {k:'desc',l:'描述'},{k:'counterparty',l:'對方／商戶',opts:shopOpts(),other:1},{k:'tag',l:'標籤'},{k:'notes',l:'備註',t:'area'}],
     t,o=>{
@@ -1058,7 +1126,7 @@ function editWish(id){
   if(wishIsDayTbd(w)) w.dueDate='';
   form(id?'修改項目':'新增 宅',[{k:'item',l:'項目',req:1},{k:'status',l:'狀態',opts:WISH_ST},{k:'maker',l:'廠商'},
     {k:'price',l:'售價',t:'number'},{k:'deposit',l:'已付訂金',t:'number'},{k:'finalPaid',l:'已付尾數／全數',t:'number'},
-    {k:'store',l:'店舖',opts:shopOpts(),other:1},{k:'orderRef',l:'單號'},{k:'forWhom',l:'為誰買'},
+    {k:'store',l:'店舖',opts:shopOpts(),other:1},{k:'orderRef',l:'單號'},{k:'forWhom',l:'為誰買',opts:['OnPP','PP'],chips:1,other:1},
     {k:'chargeAccount',l:'代付支出戶口（欠喺邊度）',opts:chargeAcctOpts()},
     {k:'receivable',l:'應收（代付）',t:'number'},
     {k:'receivedBack',l:'已收返應收',t:'check'},{k:'recvAccount',l:'收回入帳戶口',opts:chargeAcctOpts()},
@@ -1646,7 +1714,7 @@ function settings(){
   tabBeforeSettings=tab;
   settingsOpen=true;
   f.innerHTML=`<h3 style="margin:0">設定／備份</h3>
-  <div class="sub">App 程式版本：${APP_VER}（宅四狀態含「想要」· 首次出貨欄；要 v32+）</div>
+  <div class="sub">App 程式版本：${APP_VER}（OnPP／PP 拆帳 · 清數儀式；要 v33+）</div>
   <button type="button" class="primary" id="forceRefreshBtn">🔃 強制刷新 App（拎最新版）</button>
   <button type="button" class="primary" id="expBtn">⬇️ 匯出 JSON 備份</button>
   <button type="button" id="impBtn">⬆️ 匯入 JSON</button>
