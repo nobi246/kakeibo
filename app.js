@@ -1,5 +1,5 @@
 'use strict';
-const KEY='hhledger.v1', SYNC_KEY='hhledger.sync', SYNCQ_KEY='hhledger.syncq', APP_VER='v42';
+const KEY='hhledger.v1', SYNC_KEY='hhledger.sync', SYNCQ_KEY='hhledger.syncq', APP_VER='v43';
 const TX_TYPES=['支出','收入','轉帳','分期還款'];
 const WISH_ST=['想要','訂咗','收咗','棄單'];
 /* 常用店舖／商戶（宅店舖、記帳對方／商戶、固定支出帳單商戶；「其他」可自由輸入並記住） */
@@ -593,8 +593,7 @@ const CLEARING_STEPS=[
   {id:'salary777',emoji:'💰',cta:'糧入咗 777？撳確認',stamp:'入咗'},
   {id:'deductDone',emoji:'🏦',cta:'必扣搞掂？撳確認',stamp:'扣完'},
   {id:'takeCurrent',emoji:'✨',cta:'大掣 TAKE（777→current）',stamp:'TAKE',primary:true,noteField:true,notePh:'可選備註（已轉額等）'},
-  {id:'recvOnPP',emoji:'💗',cta:'收咗 OnPP？撳確認',stamp:'收齊',linkRecv:true},
-  {id:'recvPP',emoji:'🌸',cta:'收咗 PP？撳確認',stamp:'收齊',noteField:true,notePh:'可選金額／備註'},
+  {id:'recvOnPP',emoji:'💗',cta:'收咗 OnPP？撳確認',stamp:'收齊',linkRecv:true,noteField:true,notePh:'可選金額／備註'},
   {id:'cardsPaid',emoji:'💳',cta:'卡／PPS 還咗？撳確認',stamp:'還咗'}
 ];
 let _clearingSealingId=null;
@@ -604,6 +603,13 @@ function clearingRitualState(){
   if(st.ym!==SALARY_RESTORE.label){st.ym=SALARY_RESTORE.label;st.done={};st.notes={}}
   if(!st.done||typeof st.done!=='object')st.done={};
   if(!st.notes||typeof st.notes!=='object')st.notes={};
+  /* PP＝OnPP：舊「收咗 PP」一步併入 OnPP */
+  if(st.done.recvPP){st.done.recvOnPP=true;delete st.done.recvPP}
+  if(st.notes.recvPP){
+    const a=String(st.notes.recvOnPP||'').trim(), b=String(st.notes.recvPP||'').trim();
+    st.notes.recvOnPP=a&&b&&a!==b?a+'；'+b:(a||b);
+    delete st.notes.recvPP;
+  }
   return st;
 }
 function clearingRitualSave(st){try{localStorage.setItem(CLEARING_RITUAL_LS,JSON.stringify(st))}catch(_){}}
@@ -663,12 +669,12 @@ function clearingRitualHtml(){
       <span class="ritual-sparkle s1">✨</span><span class="ritual-sparkle s2">💫</span><span class="ritual-sparkle s3">🌟</span>
       <span class="ritual-sparkle s4">💗</span><span class="ritual-sparkle s5">🌸</span>
       <div class="ritual-complete-stamp">本月清數完成</div>
-      <div class="sub">${esc(SALARY_RESTORE.label)} · 六步全部蓋章啦</div>
+      <div class="sub">${esc(SALARY_RESTORE.label)} · ${CLEARING_STEPS.length}步全部蓋章啦</div>
     </div>`:'';
   return `<div class="card ritual-card">
     <h2>清數儀式</h2>
     <div class="sub tip">每步撳一下蓋章確認 · 再撳可解除</div>
-    <div class="ritual-progress"><span class="ritual-count">${doneN}／6</span>${pills}</div>
+    <div class="ritual-progress"><span class="ritual-count">${doneN}／${CLEARING_STEPS.length}</span>${pills}</div>
     <div class="ritual-steps">${cards}</div>
     ${finale}
   </div>`;
@@ -1994,7 +2000,7 @@ function settings(){
   tabBeforeSettings=tab;
   settingsOpen=true;
   f.innerHTML=`<h3 style="margin:0">設定／備份</h3>
-  <div class="sub">App 程式版本：${APP_VER}（已確定預留／建議預留分開；要 v42+）</div>
+  <div class="sub">App 程式版本：${APP_VER}（已確定預留／建議預留分開；要 v43+）</div>
   <button type="button" class="primary" id="forceRefreshBtn">🔃 強制刷新 App（拎最新版）</button>
   <button type="button" class="primary" id="expBtn">⬇️ 匯出 JSON 備份</button>
   <button type="button" id="impBtn">⬆️ 匯入 JSON</button>
