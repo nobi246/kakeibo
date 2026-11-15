@@ -1,5 +1,5 @@
 'use strict';
-const KEY='hhledger.v1', SYNC_KEY='hhledger.sync', SYNCQ_KEY='hhledger.syncq', APP_VER='v41';
+const KEY='hhledger.v1', SYNC_KEY='hhledger.sync', SYNCQ_KEY='hhledger.syncq', APP_VER='v42';
 const TX_TYPES=['支出','收入','轉帳','分期還款'];
 const WISH_ST=['想要','訂咗','收咗','棄單'];
 /* 常用店舖／商戶（宅店舖、記帳對方／商戶、固定支出帳單商戶；「其他」可自由輸入並記住） */
@@ -255,11 +255,38 @@ function reservedOneOffs(){
   }).map(r=>({id:r.id,name:r.name,amt:n(+r.hkd),d:isoD(r.nextDate)?r.nextDate:rcNext(r),kind:'tax'}))
     .sort((a,b)=>(a.d||'').localeCompare(b.d||''));
 }
+function cardMatchesCharge(a, charge){
+  const ch=String(charge||'').trim().toLowerCase().replace(/\s+/g,'');
+  if(!ch) return false;
+  const nm=String(a.name||'').trim().toLowerCase().replace(/\s+/g,'');
+  const id=String(a.id||'').trim().toLowerCase();
+  if(ch===nm||(nm&&(ch.includes(nm)||nm.includes(ch)))) return true;
+  if(id==='citi'&&/citi|6578/.test(ch)) return true;
+  if(id==='hsbc'&&/hsbc|滙豐|0992/.test(ch)) return true;
+  return false;
+}
+/* 結單面額仍係銀行要收嘅數；自己份要抽走未收回、已入呢期結單嘅 OnPP iPhone Duo */
+function iphoneDuoOnStmt(a){
+  const stmtD=isoD(a.stmtDate)||'';
+  return live(S.wishlist).filter(w=>{
+    if(w.receivedBack||!(n(w.receivable)>0)) return false;
+    if(typeof isOnPPAlias==='function'?!isOnPPAlias(w.forWhom):!/^(onpp|pp|partner)$/i.test(String(w.forWhom||'').trim())) return false;
+    const blob=((w.id||'')+' '+(w.item||'')+' '+(w.orderRef||'')+' '+(w.notes||'')).toLowerCase();
+    if(!/iphone\s*duo|w1638571512/.test(blob)) return false;
+    const ch=typeof chargeAcctOf==='function'?chargeAcctOf(w):(w.chargeAccount||'');
+    if(ch&&!cardMatchesCharge(a,ch)) return false;
+    const d=isoD(w.date)||'';
+    if(stmtD&&d&&d>stmtD) return false;
+    return true;
+  }).reduce((s,w)=>s+n(w.receivable),0);
+}
 function stmtDueItems(){
   return cards().map(a=>{
-    const due=Math.max(0,n(a.stmtBal)-n(a.paidAfterStmt));
-    if(!(due>0))return null;
-    return {id:a.id,name:(a.name||'信用卡')+' 結單應繳',amt:due,d:a.dueDate||'',kind:'stmt'};
+    const bankDue=Math.max(0,n(a.stmtBal)-n(a.paidAfterStmt));
+    const onppExcl=iphoneDuoOnStmt(a);
+    const due=Math.max(0,bankDue-onppExcl);
+    if(!(bankDue>0))return null;
+    return {id:a.id,name:(a.name||'信用卡')+' 結單應繳',amt:due,bankDue,onppExcl,d:a.dueDate||'',kind:'stmt'};
   }).filter(Boolean);
 }
 function upcomingCashUntilSalary(){
@@ -283,11 +310,11 @@ function upcomingCashUntilSalary(){
 function spendableSnapshot(){
   const cash=cashReserve();
   const tax=reservedOneOffs(), stmts=stmtDueItems(), upcoming=upcomingCashUntilSalary();
-  const confirmedAmt=[...tax,...upcoming].reduce((s,r)=>s+n(r.amt),0);
-  const suggestedAmt=stmts.reduce((s,r)=>s+n(r.amt),0);
+  const confirmedAmt=[...tax,...upcoming,...stmts].reduce((s,r)=>s+n(r.amt),0);
+  const suggestedAmt=0;
   const r2=v=>Math.round(v*100)/100;
   const avail=r2(cash-confirmedAmt);
-  const availIfPayStmt=r2(cash-confirmedAmt-suggestedAmt);
+  const availIfPayStmt=avail;
   const sal=salaryNet();
   const monthlyCash=live(S.recurring).filter(isCashDestinedRc).reduce((s,r)=>s+rcMonthly(r),0)
     +cashDestinedLoans().reduce((s,l)=>s+n(l.monthly),0);
@@ -299,7 +326,8 @@ function spendableSnapshot(){
     otherFixed,until:nextSalaryDate()};
 }
 function spendableLine(r){
-  return `<div class="row"><div class="l">${esc(r.name)}${r.d?`<small class="note">${esc(r.d)}</small>`:''}</div><div class="r neg">−${fmt0(r.amt)}</div></div>`;
+  const extra=(n(r.onppExcl)>0&&r.bankDue!=null)?`<small class="note">結單 ${fmt0(r.bankDue)} − 已抽走 OnPP iPhone Duo ${fmt0(r.onppExcl)}</small>`:'';
+  return `<div class="row"><div class="l">${esc(r.name)}${r.d?`<small class="note">${esc(r.d)}</small>`:''}${extra}</div><div class="r neg">−${fmt0(r.amt)}</div></div>`;
 }
 function spendableWarnHtml(){
   if(!hasCashTrack())return'';
@@ -319,16 +347,12 @@ function spendableHtml(asOf,netCard,instSum){
   <div class="card hero-home">
     <h2>而家真正可用</h2>
     <div class="big big-xl ${availCls}">${fmt0(x.avail)}</div>
-    <div class="sub">${asOf?'截至 '+esc(asOf)+' · ':''}帳面現金 ${fmt0(x.cash)} − 已確定預留 ${fmt0(x.confirmedAmt)}（稅＋出糧前 ${esc(x.until)} 必付；未計建議還卡）</div>
-    ${x.suggestedAmt?`<div class="row" style="margin-top:8px"><div class="l">若跟建議還清結單後<small class="note">幕僚長建議，尚未確認</small></div><div class="r ${ifCls}"><b>${fmt0(x.availIfPayStmt)}</b></div></div>`:''}
+    <div class="sub">${asOf?'截至 '+esc(asOf)+' · ':''}帳面現金 ${fmt0(x.cash)} − 已確定預留 ${fmt0(x.confirmedAmt)}（稅＋出糧前 ${esc(x.until)} 必付＋十二月結單自己份；結單後新帳留待下期；還款尚未過數）</div>
     <details class="spend-break" style="margin-top:8px"><summary class="sub"><b>已確定預留 ${fmt0(x.confirmedAmt)}</b></summary>
       ${x.tax.map(spendableLine).join('')}
       ${x.upcoming.length?`<div class="sub" style="margin-top:6px">出糧前必付 ${fmt0(upSum)}</div>${x.upcoming.map(spendableLine).join('')}`:''}
+      ${x.stmts.length?`<div class="sub" style="margin-top:6px">十二月結單自己份（還款意向，尚未過數）</div>${x.stmts.map(spendableLine).join('')}`:''}
     </details>
-    ${x.suggestedAmt?`<details class="spend-break" style="margin-top:4px"><summary class="sub"><b>建議預留／未確認 ${fmt0(x.suggestedAmt)}</b></summary>
-      <div class="sub">十二月還清結單只係建議，未當你已答應。</div>
-      ${x.stmts.map(spendableLine).join('')}
-    </details>`:''}
     <div class="grid2" style="margin-top:10px">
       <div><small class="note">卡數現況（Live）</small><div class="sub" style="margin-top:4px">循環 <b class="${fbNet.cls}">${fbNet.txt}</b><br>分期合計 ${fmt(instSum)}</div></div>
       <div><small class="note">帳面現金</small><div class="big">${fmt0(x.cash)}</div></div>
@@ -1970,7 +1994,7 @@ function settings(){
   tabBeforeSettings=tab;
   settingsOpen=true;
   f.innerHTML=`<h3 style="margin:0">設定／備份</h3>
-  <div class="sub">App 程式版本：${APP_VER}（已確定預留／建議預留分開；要 v41+）</div>
+  <div class="sub">App 程式版本：${APP_VER}（已確定預留／建議預留分開；要 v42+）</div>
   <button type="button" class="primary" id="forceRefreshBtn">🔃 強制刷新 App（拎最新版）</button>
   <button type="button" class="primary" id="expBtn">⬇️ 匯出 JSON 備份</button>
   <button type="button" id="impBtn">⬆️ 匯入 JSON</button>
