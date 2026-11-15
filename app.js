@@ -1,5 +1,5 @@
 'use strict';
-const KEY='hhledger.v1', SYNC_KEY='hhledger.sync', SYNCQ_KEY='hhledger.syncq', APP_VER='v39';
+const KEY='hhledger.v1', SYNC_KEY='hhledger.sync', SYNCQ_KEY='hhledger.syncq', APP_VER='v40';
 const TX_TYPES=['支出','收入','轉帳','分期還款'];
 const WISH_ST=['想要','訂咗','收咗','棄單'];
 /* 常用店舖／商戶（宅店舖、記帳對方／商戶、固定支出帳單商戶；「其他」可自由輸入並記住） */
@@ -192,7 +192,7 @@ const cashAccts=()=>{const A=live(S.accounts);const pref=A.filter(a=>a.id==='hsb
 const cashReserve=()=>cashAccts().reduce((s,a)=>s+n(a.balance),0);
 const hasCashTrack=()=>cashAccts().length>0;
 
-/* 真正可用＝帳面現金 − 已預留（稅／一次過、未付結單應繳、出糧前現金必付） */
+/* 真正可用＝帳面現金 − 已確定預留（稅／一次過、出糧前現金必付）；建議還清結單另列，未確認唔寫死 */
 function salaryNet(){
   const sal=live(S.salary||[]).slice().sort((a,b)=>String(a.date||'').localeCompare(String(b.date||'')));
   const cur=sal[sal.length-1];
@@ -267,16 +267,19 @@ function upcomingCashUntilSalary(){
 function spendableSnapshot(){
   const cash=cashReserve();
   const tax=reservedOneOffs(), stmts=stmtDueItems(), upcoming=upcomingCashUntilSalary();
-  const reservedAmt=[...tax,...stmts,...upcoming].reduce((s,r)=>s+n(r.amt),0);
-  const avail=Math.round((cash-reservedAmt)*100)/100;
+  const confirmedAmt=[...tax,...upcoming].reduce((s,r)=>s+n(r.amt),0);
+  const suggestedAmt=stmts.reduce((s,r)=>s+n(r.amt),0);
+  const r2=v=>Math.round(v*100)/100;
+  const avail=r2(cash-confirmedAmt);
+  const availIfPayStmt=r2(cash-confirmedAmt-suggestedAmt);
   const sal=salaryNet();
   const monthlyCash=live(S.recurring).filter(isCashDestinedRc).reduce((s,r)=>s+rcMonthly(r),0)
     +cashDestinedLoans().reduce((s,l)=>s+n(l.monthly),0);
   const inst=cardInstMonthly();
   const otherFixed=live(S.recurring).filter(rcCounted).filter(r=>!isCashDestinedRc(r)).reduce((s,r)=>s+rcMonthly(r),0);
-  return {cash,tax,stmts,upcoming,reservedAmt,avail,sal,monthlyCash,inst,
-    afterDest:sal?Math.round((sal-monthlyCash)*100)/100:null,
-    afterInst:sal?Math.round((sal-monthlyCash-inst)*100)/100:null,
+  return {cash,tax,stmts,upcoming,confirmedAmt,suggestedAmt,avail,availIfPayStmt,sal,monthlyCash,inst,
+    afterDest:sal?r2(sal-monthlyCash):null,
+    afterInst:sal?r2(sal-monthlyCash-inst):null,
     otherFixed,until:nextSalaryDate()};
 }
 function spendableLine(r){
@@ -285,26 +288,31 @@ function spendableLine(r){
 function spendableWarnHtml(){
   if(!hasCashTrack())return'';
   const x=spendableSnapshot();
-  if(x.avail<=0)return `<div class="warn">⚠️ 扣晒已預留（稅、結單應繳、出糧前必付）之後，真正可用 ${fmt0(x.avail)}。帳面現金 ${fmt0(x.cash)} 唔等於使得。</div>`;
-  if(x.avail<5000)return `<div class="warn">⚠️ 扣晒已預留之後，真正可用得 ${fmt0(x.avail)}。見到帳面 ${fmt0(x.cash)} 都唔好當全部使得。</div>`;
+  if(x.avail<=0)return `<div class="warn">⚠️ 扣晒已確定預留（稅、出糧前必付）之後，真正可用 ${fmt0(x.avail)}。帳面現金 ${fmt0(x.cash)} 唔等於使得。</div>`;
+  if(x.avail<5000)return `<div class="warn">⚠️ 扣晒已確定預留之後，真正可用得 ${fmt0(x.avail)}。見到帳面 ${fmt0(x.cash)} 都唔好當全部使得。</div>`;
   return'';
 }
 function spendableHtml(asOf,netCard,instSum){
   if(!hasCashTrack())return'';
   const x=spendableSnapshot();
   const availCls=x.avail<=0?'neg':x.avail<5000?'':'pos';
+  const ifCls=x.availIfPayStmt<=0?'neg':x.availIfPayStmt<5000?'':'pos';
   const fbNet=fmtBal(netCard);
   const upSum=x.upcoming.reduce((s,r)=>s+n(r.amt),0);
   return `
   <div class="card hero-home">
     <h2>而家真正可用</h2>
     <div class="big big-xl ${availCls}">${fmt0(x.avail)}</div>
-    <div class="sub">${asOf?'截至 '+esc(asOf)+' · ':''}帳面現金 ${fmt0(x.cash)} − 已預留 ${fmt0(x.reservedAmt)}（出糧前 ${esc(x.until)}）</div>
-    <details class="spend-break" style="margin-top:8px"><summary class="sub"><b>已預留 ${fmt0(x.reservedAmt)}</b></summary>
+    <div class="sub">${asOf?'截至 '+esc(asOf)+' · ':''}帳面現金 ${fmt0(x.cash)} − 已確定預留 ${fmt0(x.confirmedAmt)}（稅＋出糧前 ${esc(x.until)} 必付；未計建議還卡）</div>
+    ${x.suggestedAmt?`<div class="row" style="margin-top:8px"><div class="l">若跟建議還清結單後<small class="note">幕僚長建議，尚未確認</small></div><div class="r ${ifCls}"><b>${fmt0(x.availIfPayStmt)}</b></div></div>`:''}
+    <details class="spend-break" style="margin-top:8px"><summary class="sub"><b>已確定預留 ${fmt0(x.confirmedAmt)}</b></summary>
       ${x.tax.map(spendableLine).join('')}
-      ${x.stmts.map(spendableLine).join('')}
       ${x.upcoming.length?`<div class="sub" style="margin-top:6px">出糧前必付 ${fmt0(upSum)}</div>${x.upcoming.map(spendableLine).join('')}`:''}
     </details>
+    ${x.suggestedAmt?`<details class="spend-break" style="margin-top:4px"><summary class="sub"><b>建議預留／未確認 ${fmt0(x.suggestedAmt)}</b></summary>
+      <div class="sub">十二月還清結單只係建議，未當你已答應。</div>
+      ${x.stmts.map(spendableLine).join('')}
+    </details>`:''}
     <div class="grid2" style="margin-top:10px">
       <div><small class="note">卡數現況（Live）</small><div class="sub" style="margin-top:4px">循環 <b class="${fbNet.cls}">${fbNet.txt}</b><br>分期合計 ${fmt(instSum)}</div></div>
       <div><small class="note">帳面現金</small><div class="big">${fmt0(x.cash)}</div></div>
@@ -1936,7 +1944,7 @@ function settings(){
   tabBeforeSettings=tab;
   settingsOpen=true;
   f.innerHTML=`<h3 style="margin:0">設定／備份</h3>
-  <div class="sub">App 程式版本：${APP_VER}（帳面現金／已預留／真正可用；要 v39+）</div>
+  <div class="sub">App 程式版本：${APP_VER}（已確定預留／建議預留分開；要 v40+）</div>
   <button type="button" class="primary" id="forceRefreshBtn">🔃 強制刷新 App（拎最新版）</button>
   <button type="button" class="primary" id="expBtn">⬇️ 匯出 JSON 備份</button>
   <button type="button" id="impBtn">⬆️ 匯入 JSON</button>
