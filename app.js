@@ -1,5 +1,5 @@
 'use strict';
-const KEY='hhledger.v1', SYNC_KEY='hhledger.sync', SYNCQ_KEY='hhledger.syncq', APP_VER='v38';
+const KEY='hhledger.v1', SYNC_KEY='hhledger.sync', SYNCQ_KEY='hhledger.syncq', APP_VER='v39';
 const TX_TYPES=['支出','收入','轉帳','分期還款'];
 const WISH_ST=['想要','訂咗','收咗','棄單'];
 /* 常用店舖／商戶（宅店舖、記帳對方／商戶、固定支出帳單商戶；「其他」可自由輸入並記住） */
@@ -191,6 +191,136 @@ const cashAccts=()=>{const A=live(S.accounts);const pref=A.filter(a=>a.id==='hsb
   return A.filter(a=>a.stmtBal==null&&/銀行|現金|信封|儲備/.test(a.type||''))};
 const cashReserve=()=>cashAccts().reduce((s,a)=>s+n(a.balance),0);
 const hasCashTrack=()=>cashAccts().length>0;
+
+/* 真正可用＝帳面現金 − 已預留（稅／一次過、未付結單應繳、出糧前現金必付） */
+function salaryNet(){
+  const sal=live(S.salary||[]).slice().sort((a,b)=>String(a.date||'').localeCompare(String(b.date||'')));
+  const cur=sal[sal.length-1];
+  if(cur&&n(cur.net)>0)return n(cur.net);
+  if(cur&&n(cur.monthly)>0)return n(cur.monthly);
+  const txs=live(S.transactions).filter(t=>t.type==='收入'&&n(t.amount)>0&&/薪|SALARY|出糧|FITCH/i.test(String(t.desc||'')+String(t.sub||'')+String(t.category||'')))
+    .sort((a,b)=>String(b.date||'').localeCompare(String(a.date||'')));
+  return txs[0]?n(txs[0].amount):0;
+}
+function nextSalaryDate(from){
+  const t=from||today();
+  const [y,mo,d]=t.split('-').map(Number);
+  if(d<15)return y+'-'+String(mo).padStart(2,'0')+'-15';
+  return addMonths(y+'-'+String(mo).padStart(2,'0')+'-15',1);
+}
+function isCashAcctName(acc){
+  const s=String(acc||'');
+  if(!s)return false;
+  if(/visa|citi|mastercard|amex|信用卡|premier|signature|0992|6578/i.test(s))return false;
+  if(s==='hsbc-one'||s==='hsbc-savings')return true;
+  return /儲蓄|One|543|777|833|銀行|現金|港元/.test(s);
+}
+function isCashDestinedRc(r){
+  if(!rcOn(r)||!rcHas(r))return false;
+  if((r.cycle||'每月')==='一次'||!rcPerMonth(r))return false;
+  if(r.kind==='保險'||r.kind==='租金管理費')return true;
+  if(/家用/.test(r.name||''))return true;
+  return isCashAcctName(r.account);
+}
+function cashDestinedLoans(){
+  return (typeof activeLoans==='function'?activeLoans():[]).filter(l=>l.type!=='卡分期'&&!l.revolving);
+}
+function cardInstMonthly(){
+  return (typeof activeLoans==='function'?activeLoans():[]).filter(l=>l.type==='卡分期').reduce((s,l)=>s+n(l.monthly),0);
+}
+function reservedOneOffs(){
+  return live(S.recurring).filter(r=>{
+    if(!rcOn(r)||!rcHas(r))return false;
+    const tax=/稅|IRD|薪俸稅/.test(String(r.name||'')+String(r.kind||'')+String(r.merchant||''));
+    const once=(r.cycle==='一次')||(r.cycle==='不定期'&&isoD(r.nextDate));
+    if(!(once||tax))return false;
+    const d=isoD(r.nextDate)?r.nextDate:(typeof rcNext==='function'?rcNext(r):'');
+    return d&&d>=today();
+  }).map(r=>({id:r.id,name:r.name,amt:n(+r.hkd),d:isoD(r.nextDate)?r.nextDate:rcNext(r),kind:'tax'}))
+    .sort((a,b)=>(a.d||'').localeCompare(b.d||''));
+}
+function stmtDueItems(){
+  return cards().map(a=>{
+    const due=Math.max(0,n(a.stmtBal)-n(a.paidAfterStmt));
+    if(!(due>0))return null;
+    return {id:a.id,name:(a.name||'信用卡')+' 結單應繳',amt:due,d:a.dueDate||'',kind:'stmt'};
+  }).filter(Boolean);
+}
+function upcomingCashUntilSalary(){
+  const t=today(), until=nextSalaryDate(t);
+  const months=[t.slice(0,7),addMonths(t,1).slice(0,7),addMonths(t,2).slice(0,7)];
+  const rows=[];
+  live(S.recurring).filter(isCashDestinedRc).forEach(r=>{
+    months.forEach(m=>((typeof rcOccur==='function'?rcOccur(r,m):[])||[]).forEach(d=>{
+      if(d>=t&&d<until&&rcHas(r))rows.push({id:r.id,name:r.name,amt:n(+r.hkd),d,kind:'cash'});
+    }));
+  });
+  cashDestinedLoans().forEach(l=>{
+    months.forEach(m=>((typeof loanOccur==='function'?loanOccur(l,m):[])||[]).forEach(d=>{
+      if(d>=t&&d<until)rows.push({id:l.id,name:l.name,amt:n(l.monthly),d,kind:'loan'});
+    }));
+  });
+  const seen=new Set();
+  return rows.filter(r=>{const k=r.id+'@'+r.d;if(seen.has(k))return false;seen.add(k);return true;})
+    .sort((a,b)=>a.d.localeCompare(b.d)||String(a.name).localeCompare(String(b.name),'zh-HK'));
+}
+function spendableSnapshot(){
+  const cash=cashReserve();
+  const tax=reservedOneOffs(), stmts=stmtDueItems(), upcoming=upcomingCashUntilSalary();
+  const reservedAmt=[...tax,...stmts,...upcoming].reduce((s,r)=>s+n(r.amt),0);
+  const avail=Math.round((cash-reservedAmt)*100)/100;
+  const sal=salaryNet();
+  const monthlyCash=live(S.recurring).filter(isCashDestinedRc).reduce((s,r)=>s+rcMonthly(r),0)
+    +cashDestinedLoans().reduce((s,l)=>s+n(l.monthly),0);
+  const inst=cardInstMonthly();
+  const otherFixed=live(S.recurring).filter(rcCounted).filter(r=>!isCashDestinedRc(r)).reduce((s,r)=>s+rcMonthly(r),0);
+  return {cash,tax,stmts,upcoming,reservedAmt,avail,sal,monthlyCash,inst,
+    afterDest:sal?Math.round((sal-monthlyCash)*100)/100:null,
+    afterInst:sal?Math.round((sal-monthlyCash-inst)*100)/100:null,
+    otherFixed,until:nextSalaryDate()};
+}
+function spendableLine(r){
+  return `<div class="row"><div class="l">${esc(r.name)}${r.d?`<small class="note">${esc(r.d)}</small>`:''}</div><div class="r neg">−${fmt0(r.amt)}</div></div>`;
+}
+function spendableWarnHtml(){
+  if(!hasCashTrack())return'';
+  const x=spendableSnapshot();
+  if(x.avail<=0)return `<div class="warn">⚠️ 扣晒已預留（稅、結單應繳、出糧前必付）之後，真正可用 ${fmt0(x.avail)}。帳面現金 ${fmt0(x.cash)} 唔等於使得。</div>`;
+  if(x.avail<5000)return `<div class="warn">⚠️ 扣晒已預留之後，真正可用得 ${fmt0(x.avail)}。見到帳面 ${fmt0(x.cash)} 都唔好當全部使得。</div>`;
+  return'';
+}
+function spendableHtml(asOf,netCard,instSum){
+  if(!hasCashTrack())return'';
+  const x=spendableSnapshot();
+  const availCls=x.avail<=0?'neg':x.avail<5000?'':'pos';
+  const fbNet=fmtBal(netCard);
+  const upSum=x.upcoming.reduce((s,r)=>s+n(r.amt),0);
+  return `
+  <div class="card hero-home">
+    <h2>而家真正可用</h2>
+    <div class="big big-xl ${availCls}">${fmt0(x.avail)}</div>
+    <div class="sub">${asOf?'截至 '+esc(asOf)+' · ':''}帳面現金 ${fmt0(x.cash)} − 已預留 ${fmt0(x.reservedAmt)}（出糧前 ${esc(x.until)}）</div>
+    <details class="spend-break" style="margin-top:8px"><summary class="sub"><b>已預留 ${fmt0(x.reservedAmt)}</b></summary>
+      ${x.tax.map(spendableLine).join('')}
+      ${x.stmts.map(spendableLine).join('')}
+      ${x.upcoming.length?`<div class="sub" style="margin-top:6px">出糧前必付 ${fmt0(upSum)}</div>${x.upcoming.map(spendableLine).join('')}`:''}
+    </details>
+    <div class="grid2" style="margin-top:10px">
+      <div><small class="note">卡數現況（Live）</small><div class="sub" style="margin-top:4px">循環 <b class="${fbNet.cls}">${fbNet.txt}</b><br>分期合計 ${fmt(instSum)}</div></div>
+      <div><small class="note">帳面現金</small><div class="big">${fmt0(x.cash)}</div></div>
+    </div>
+  </div>
+  ${x.sal?`<div class="card">
+    <h2>每月出糧後剩幾多</h2>
+    <div class="row"><div class="l">糧（扣 MPF 後）</div><div class="r">${fmt0(x.sal)}</div></div>
+    <div class="row"><div class="l">注定會走（家用／保險／貸款月供）</div><div class="r neg">−${fmt0(x.monthlyCash)}</div></div>
+    <div class="row"><div class="l"><b>出糧後先剩</b></div><div class="r"><b>${fmt0(x.afterDest)}</b></div></div>
+    <div class="row"><div class="l">兩卡分期</div><div class="r neg">−${fmt0(x.inst)}</div></div>
+    <div class="row"><div class="l"><b>再剩</b></div><div class="r"><b class="${x.afterInst<=0?'neg':''}">${fmt0(x.afterInst)}</b></div></div>
+    ${x.otherFixed?`<div class="sub">電話、訂閱、泊車自己份等其他固定約 ${fmt0(x.otherFixed)}，多數入卡，未扣在上面。</div>`:''}
+  </div>`:''}`;
+}
+
 /* 記帳篩選：現金／儲蓄 vs 信用卡（用帳戶名稱對） */
 const _normAcct=s=>String(s||'').toLowerCase().replace(/\s+/g,'');
 const cashAcctNames=()=>cashAccts().map(a=>a.name).filter(Boolean);
@@ -586,17 +716,10 @@ function vOverview(){
   }).join('');
   return `
   ${warns.map(w=>`<div class="warn">${w}</div>`).join('')}
+  ${spendableWarnHtml()}
   ${reserveStatusHtml()}
   ${salaryRestoreTeaserHtml()}
-  <div class="card hero-home">
-    <h2>而家嘅家底</h2>
-    <div class="big big-xl ${cashCls||'pos'}">${fmt0(cash)}</div>
-    <div class="sub">${asOf?'截至 '+esc(asOf)+' · ':''}${esc(coverQuip(cash,netCard,instSum))}</div>
-    <div class="grid2" style="margin-top:10px">
-      <div><small class="note">卡數現況（Live）</small><div class="sub" style="margin-top:4px">循環 <b class="${fbNet.cls}">${fbNet.txt}</b><br>分期合計 ${fmt(instSum)}</div></div>
-      <div><small class="note">流動儲備</small><div class="big ${cashCls||'pos'}">${fmt0(cash)}</div></div>
-    </div>
-  </div>
+  ${spendableHtml(asOf,netCard,instSum)}
   <div class="card"><h2>信用卡 Live</h2>
     <div class="sub" style="margin-bottom:6px">循環結餘／結欠同分期剩餘永遠分開顯示（唔撈埋一個數）</div>
     ${cardRows||'<div class="sub">未有信用卡帳戶</div>'}
@@ -1813,7 +1936,7 @@ function settings(){
   tabBeforeSettings=tab;
   settingsOpen=true;
   f.innerHTML=`<h3 style="margin:0">設定／備份</h3>
-  <div class="sub">App 程式版本：${APP_VER}（OnPP／PP 拆帳 · 蓋章儀式；要 v38+）</div>
+  <div class="sub">App 程式版本：${APP_VER}（帳面現金／已預留／真正可用；要 v39+）</div>
   <button type="button" class="primary" id="forceRefreshBtn">🔃 強制刷新 App（拎最新版）</button>
   <button type="button" class="primary" id="expBtn">⬇️ 匯出 JSON 備份</button>
   <button type="button" id="impBtn">⬆️ 匯入 JSON</button>
