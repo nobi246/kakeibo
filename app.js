@@ -1,5 +1,5 @@
 'use strict';
-const KEY='hhledger.v1', SYNC_KEY='hhledger.sync', SYNCQ_KEY='hhledger.syncq', APP_VER='v40';
+const KEY='hhledger.v1', SYNC_KEY='hhledger.sync', SYNCQ_KEY='hhledger.syncq', APP_VER='v41';
 const TX_TYPES=['支出','收入','轉帳','分期還款'];
 const WISH_ST=['想要','訂咗','收咗','棄單'];
 /* 常用店舖／商戶（宅店舖、記帳對方／商戶、固定支出帳單商戶；「其他」可自由輸入並記住） */
@@ -153,6 +153,22 @@ function normalize(){
   });
   if(wishFilter!=='全部'&&!WISH_ST.includes(wishFilter)) wishFilter='全部';
   if(!S.categories.includes('退款／代付收回'))S.categories.push('退款／代付收回');
+  live(S.wishlist).forEach(w=>{
+    const nfw=normalizeForWhom(w.forWhom);
+    if(w.forWhom&&nfw!==w.forWhom){w.forWhom=nfw;w.updatedAt=stamp(w.updatedAt);Sync.queue('wishlist',w)}
+  });
+  live(S.transactions).forEach(t=>{
+    if(t.partnerFor==null||t.partnerFor==='')return;
+    const nfw=normalizeForWhom(t.partnerFor);
+    if(nfw!==t.partnerFor){t.partnerFor=nfw;t.updatedAt=stamp(t.updatedAt);Sync.queue('transactions',t)}
+  });
+  const recvAcct=(S.accounts||[]).find(a=>a&&a.id==='recv'&&!a.deleted);
+  if(recvAcct){
+    const nm=String(recvAcct.name||'').trim();
+    if(nm==='Receivable (partner)'||nm==='Receivable (PP)'||nm==='PP 應收'||/^partner$/i.test(nm)){
+      recvAcct.name='OnPP 應收';recvAcct.updatedAt=stamp(recvAcct.updatedAt);Sync.queue('accounts',recvAcct);
+    }
+  }
 }
 
 /* ---------- 計算 ---------- */
@@ -1076,9 +1092,18 @@ function wishDisplayTitle(w){
   if(!w) return '（未命名）';
   return parseShopOrderItem(w.item, w.store).title;
 }
+/* PP＝OnPP＝partner，同一人；顯示同儲存一律用 OnPP */
+function isOnPPAlias(fw){
+  return /^(onpp|pp|partner)$/i.test(String(fw||'').trim());
+}
 function forWhomLabel(fw){
   const s=String(fw||'').trim();
-  if(/^partner$/i.test(s)) return 'OnPP';
+  if(isOnPPAlias(s)) return 'OnPP';
+  return s;
+}
+function normalizeForWhom(fw){
+  const s=String(fw||'').trim();
+  if(isOnPPAlias(s)) return 'OnPP';
   return s;
 }
 /* OnPP／PP 純應收（如 Wilson 停車）唔霸宅列表主行；仍出現喺 OnPP 應收 */
@@ -1276,12 +1301,12 @@ function editTx(id){
   form(id?'修改紀錄':'記一筆',[
     {k:'date',l:'日期',t:'date',req:1},{k:'type',l:'類型',opts:TX_TYPES},{k:'amount',l:'金額（HKD）',t:'number',req:1},
     {k:'partnerRecv',l:'OnPP 應收（拆帳金額）',t:'number'},
-    {k:'partnerFor',l:'為誰（拆帳）',opts:['OnPP','PP'],chips:1,other:1},
+    {k:'partnerFor',l:'為誰（拆帳）',opts:['OnPP'],chips:1,other:1},
     {k:'category',l:'分類',opts:S.categories},{k:'sub',l:'細項'},{k:'account',l:'帳戶',opts:acctNames()},
     {k:'desc',l:'描述'},{k:'counterparty',l:'對方／商戶',opts:shopOpts(),other:1},{k:'tag',l:'標籤'},{k:'notes',l:'備註',t:'area'}],
     t,o=>{
       if(o.dm&&o.date&&!o.date.endsWith('-01'))delete o.dm;
-      if(o.partnerFor!=null)o.partnerFor=String(o.partnerFor||'').trim();
+      if(o.partnerFor!=null)o.partnerFor=normalizeForWhom(o.partnerFor);
       upsertLocal('transactions',o,!id);
       ensureTxPartnerRecv(o);
     },id?()=>tombstone('transactions',id):null);
@@ -1314,7 +1339,7 @@ function editWish(id){
   if(wishIsDayTbd(w)) w.dueDate='';
   form(id?'修改項目':'新增 宅',[{k:'item',l:'項目',req:1},{k:'status',l:'狀態',opts:WISH_ST},{k:'maker',l:'廠商'},
     {k:'price',l:'售價',t:'number'},{k:'deposit',l:'已付訂金',t:'number'},{k:'finalPaid',l:'已付尾數／全數',t:'number'},
-    {k:'store',l:'店舖',opts:shopOpts(),other:1},{k:'orderRef',l:'單號'},{k:'forWhom',l:'為誰買',opts:['OnPP','PP'],chips:1,other:1},
+    {k:'store',l:'店舖',opts:shopOpts(),other:1},{k:'orderRef',l:'單號'},{k:'forWhom',l:'為誰買',opts:['OnPP'],chips:1,other:1},
     {k:'chargeAccount',l:'代付支出戶口（欠喺邊度）',opts:chargeAcctOpts()},
     {k:'receivable',l:'應收（代付）',t:'number'},
     {k:'receivedBack',l:'已收返應收',t:'check'},{k:'recvAccount',l:'收回入帳戶口',opts:chargeAcctOpts()},
@@ -1325,6 +1350,7 @@ function editWish(id){
     {k:'date',l:'訂購／入帳日',t:'date'},{k:'notes',l:'備註',t:'area'}],
     w,o=>{
       normalizeWishDue(o);
+      if(o.forWhom!=null)o.forWhom=normalizeForWhom(o.forWhom);
       if(base){Object.assign(base,o);upsertLocal('wishlist',base,false);ensureRecvIncome(base)}
       else{upsertLocal('wishlist',o,true);ensureRecvIncome(o)}
     },base?()=>tombstone('wishlist',id):null);
@@ -1944,7 +1970,7 @@ function settings(){
   tabBeforeSettings=tab;
   settingsOpen=true;
   f.innerHTML=`<h3 style="margin:0">設定／備份</h3>
-  <div class="sub">App 程式版本：${APP_VER}（已確定預留／建議預留分開；要 v40+）</div>
+  <div class="sub">App 程式版本：${APP_VER}（已確定預留／建議預留分開；要 v41+）</div>
   <button type="button" class="primary" id="forceRefreshBtn">🔃 強制刷新 App（拎最新版）</button>
   <button type="button" class="primary" id="expBtn">⬇️ 匯出 JSON 備份</button>
   <button type="button" id="impBtn">⬆️ 匯入 JSON</button>
