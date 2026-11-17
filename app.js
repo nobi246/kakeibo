@@ -1,5 +1,5 @@
 'use strict';
-const KEY='hhledger.v1', SYNC_KEY='hhledger.sync', SYNCQ_KEY='hhledger.syncq', APP_VER='v46';
+const KEY='hhledger.v1', SYNC_KEY='hhledger.sync', SYNCQ_KEY='hhledger.syncq', APP_VER='v47';
 const TX_TYPES=['支出','收入','轉帳','分期還款'];
 const WISH_ST=['想要','訂咗','收咗','棄單'];
 /* 常用店舖／商戶（宅店舖、記帳對方／商戶、固定支出帳單商戶；「其他」可自由輸入並記住） */
@@ -169,6 +169,7 @@ function normalize(){
       recvAcct.name='OnPP 應收';recvAcct.updatedAt=stamp(recvAcct.updatedAt);Sync.queue('accounts',recvAcct);
     }
   }
+  normalizeRecurring();
 }
 
 /* ---------- 計算 ---------- */
@@ -1622,6 +1623,57 @@ const ST_PILL={'生效中':'ok','試用中':'amber','可能已停':'red','已取
 const ICHIBAN=80;   // 一番賞一抽大約 $80（講笑用）
 const rcOn=r=>r.status==='生效中'||r.status==='試用中';
 const rcAdult=r=>!!r.adult||r.category==='成人';
+const rcIsCancelled=r=>String(r.status||'').startsWith('已取消');
+function rcAnchorChargeDate(r){
+  if(isoD(r.lastDate))return r.lastDate;
+  if(isoD(r.firstSeen))return r.firstSeen;
+  return '';
+}
+function rcAutoShelved(r){
+  if(r.status==='待確認')return false;
+  if(r.status!=='搵唔到紀錄，請補')return false;
+  const a=rcAnchorChargeDate(r);
+  return !!(a&&addMonths(a,6)<=today());
+}
+function rcShelved(r){
+  return rcIsCancelled(r)||r.status==='可能已停'||rcAutoShelved(r);
+}
+function rcWsdCorrupt(r){
+  if(!r||r.id!=='rc-wsd')return false;
+  const st=r.status;
+  return st===false||st==='FALSE'||st==='false'||r.firstSeen==='已取消'||r.hkd==='每四個月'||r.amount==='HKD'||r.cycle===15||r.cycle==='15';
+}
+function normalizeRecurring(){
+  const WSD_NOTES='約每四個月手動掃 code 交水費；金額通常幾百。已併入 rc-clp「水電 pot 每月預留 $2000」，唔再另計每月固定 $200。實單記 Transactions：由水電 pot 出、分類「公用事業／水費」。';
+  live(S.recurring).forEach(r=>{
+    let ch=false;
+    if(r.id==='rc-files-editor'&&rcIsCancelled(r)&&r.status!=='已取消'){
+      r.status='已取消';
+      if(!r.cancelledAt)r.cancelledAt='2026-10-16';
+      ch=true;
+    }
+    if(rcWsdCorrupt(r)){
+      const notes=String(r.txIds||r.notes||'');
+      r.kind='水電煤';
+      r.name='水費（Wetland WSD）實單（已併入 pot）';
+      r.merchant='WSD／水務';
+      r.category='';r.account='';
+      r.amount='';r.currency='HKD';r.hkd='';
+      r.cycle='每四個月';r.day=15;
+      r.lastDate='';r.nextDate='';r.firstSeen='';
+      r.status='已取消';r.adult=false;r.est=false;
+      r.flag='';r.evidence='';r.txIds='';
+      r.notes=/已併入/.test(notes)?notes:WSD_NOTES;
+      r.source='agent 2026-10-17 utility-pot model';
+      if(!r.cancelledAt)r.cancelledAt='2026-10-17';
+      ch=true;
+    }
+    if((rcIsCancelled(r)||r.status==='可能已停'||rcAutoShelved(r))&&r.nextDate){
+      r.nextDate='';ch=true;
+    }
+    if(ch){r.updatedAt=stamp(r.updatedAt);Sync.queue('recurring',r)}
+  });
+}
 const rcPerMonth=r=>RC_PER_MONTH[r.cycle||'每月']||0;
 const rcHas=r=>r.hkd!=null&&r.hkd!==''&&isFinite(r.hkd);
 const rcCounted=r=>rcOn(r)&&rcHas(r)&&rcPerMonth(r)>0;
@@ -1660,7 +1712,7 @@ function fxStats(){
   const R=live(S.recurring), on=R.filter(rcCounted);
   const other=on.reduce((s,r)=>s+rcMonthly(r),0), loans=loanMode()?activeLoans().reduce((s,l)=>s+n(l.monthly),0):burden();
   const subs=on.filter(r=>r.kind==='訂閱').reduce((s,r)=>s+rcMonthly(r),0);
-  const pend=R.filter(r=>r.status==='待確認'||r.status==='搵唔到紀錄，請補');
+  const pend=R.filter(r=>(r.status==='待確認'||r.status==='搵唔到紀錄，請補')&&!rcShelved(r));
   return {R,on,other,loans,total:other+loans,subs,pend,pendAmt:pend.filter(r=>rcHas(r)&&rcPerMonth(r)).reduce((s,r)=>s+n(+r.hkd)*rcPerMonth(r),0)}}
 function setRcSt(id,st){
   const r=S.recurring.find(x=>x.id===id); if(!r)return;
@@ -1669,6 +1721,7 @@ function setRcSt(id,st){
   const wasOn=rcOn(r);
   r.status=st;
   if(st==='已取消'&&!r.cancelledAt)r.cancelledAt=today();
+  if((String(st||'').startsWith('已取消')||st==='可能已停')&&r.nextDate)r.nextDate='';
   r.updatedAt=stamp(r.updatedAt); Sync.queue('recurring',r); save(); rerender(1);
   if(st==='已取消'&&wasOn) toast('已標記為已取消 ✂️ 每月慳返 '+fmt0(n(+r.hkd)*rcPerMonth(r)));
   else toast('已標「'+st+'」');
@@ -1706,13 +1759,15 @@ function vFixed(){
   const dayList=sel?`<div class="sub" style="margin-top:6px"><b>${fxDay}</b>：${sel.length?sel.map(e=>`${e.pin?'📌 ':''}${e.icon} ${esc(e.name)} ${e.amt!=null?fmt0(e.amt):'金額未知'}`).join('、'):'冇扣數'}</div>`:'';
   const tl=up.filter(e=>dayDiff(t,e.d)<=31);
   const filt=FX_FILT.map(([k,lab])=>`<button class="${fxFilter===k?'on':''}" onclick="fxFilter='${k}';rerender(1)">${lab}</button>`).join('');
-  const R=st.R, adult=R.filter(rcAdult), normal=R.filter(r=>!rcAdult(r));
-  const shown=normal.filter(r=>fxShowOff||r.status!=='已取消'&&r.status!=='可能已停'), offN=normal.length-normal.filter(r=>r.status!=='已取消'&&r.status!=='可能已停').length;
+  const R=st.R;
+  const shown=R.filter(r=>fxShowOff||!rcShelved(r));
+  const normal=shown.filter(r=>!rcAdult(r)), adult=shown.filter(rcAdult);
+  const offN=R.filter(rcShelved).length;
   const grp=(title,L,open=true)=>{if(!L.length)return '';const s=L.reduce((a,r)=>a+rcMonthly(r),0);
     return `<details class="lgrp"${open?' open':''}><summary><span>${title} · ${L.length} 項</span><span class="r">${fmt0(s)}/月</span></summary>${L.sort((a,b)=>(rcOn(b)-rcOn(a))||rcMonthly(b)-rcMonthly(a)).map(rcRow).join('')}</details>`};
-  const subs=shown.filter(r=>r.kind==='訂閱');
+  const subs=normal.filter(r=>r.kind==='訂閱');
   const subGroups=RC_CATS.filter(c=>c!=='成人').map(c=>grp(`${CAT_ICON[c]} ${c}`,subs.filter(r=>(r.category||'其他')===c))).join('')+grp('✨ 其他',subs.filter(r=>!RC_CATS.includes(r.category)));
-  const kindGroups=RC_KINDS.filter(k=>k!=='訂閱').map(k=>grp(`${RC_ICON[k]} ${k}`,shown.filter(r=>r.kind===k))).join('')+grp('📦 未分類',shown.filter(r=>!RC_KINDS.includes(r.kind)));
+  const kindGroups=RC_KINDS.filter(k=>k!=='訂閱').map(k=>grp(`${RC_ICON[k]} ${k}`,normal.filter(r=>r.kind===k))).join('')+grp('📦 未分類',normal.filter(r=>!RC_KINDS.includes(r.kind)));
   const A=activeLoans().slice().sort((a,b)=>(loanNext(a)||'9').localeCompare(loanNext(b)||'9'));
   const aOn=adult.filter(rcCounted), aAmt=aOn.reduce((s,r)=>s+rcMonthly(r),0);
   const draws=Math.round(st.subs/ICHIBAN);
@@ -1738,10 +1793,10 @@ function vFixed(){
     <details class="lgrp"><summary><span>${A.length} 條進行中</span><span class="r">${fmt0(st.loans)}/月</span></summary>${A.map(loanFxRow).join('')||'<div class="sub">冇進行中嘅貸款</div>'}</details>
     <div class="sub">撳任何一條跳去 💸 貸款 tab 改期數。循環卡數冇固定月供，唔計入。</div></div>
   <div class="actions">${offN?`<button onclick="fxShowOff=!fxShowOff;rerender(1)">${fxShowOff?'收埋':'顯示'}已停／已取消（${offN}）</button>`:''}<button onclick="editRc()">＋ 新增固定支出</button></div>
-  <div class="sub tip">📌 每月合計只計「生效中／試用中」而有金額嘅項目；年費÷12、每週×52÷12。貸款／分期直接用 💸 貸款 tab（同總覽「每月分期負擔」一樣），呢度唔會再存一次，所以唔會重複計。日曆預設「生活固定」：訂閱、水電、電話、保險、泊車、家用；要睇貸款撳上面「貸款分期」。</div>
+  <div class="sub tip">📌 每月合計只計「生效中／試用中」而有金額嘅項目；年費÷12、每週×52÷12。已取消／可能已停／過期唔用會留紀錄、預設收埋（私人分組一樣），撳「顯示已停／已取消」可揭返。搵唔到紀錄又大概 6 個月冇新扣數（跟上次／第一次見）會自動收埋，唔會永遠催。貸款／分期直接用 💸 貸款 tab（同總覽「每月分期負擔」一樣），呢度唔會再存一次，所以唔會重複計。日曆預設「生活固定」：訂閱、水電、電話、保險、泊車、家用；要睇貸款撳上面「貸款分期」。</div>
   <button class="fab" onclick="editRc()">＋</button>`}
 function cancelRc(id){const r=S.recurring.find(x=>x.id===id);if(!r||!confirm(`標記「${rcAdult(r)?'呢個私人項目':r.name}」為已取消？（只係改紀錄，唔會幫你取消訂閱）`))return;
-  r.status='已取消';r.cancelledAt=today();r.updatedAt=stamp(r.updatedAt);Sync.queue('recurring',r);save();rerender(1);toast('已標記為已取消 ✂️ 每月慳返 '+fmt0(n(+r.hkd)*rcPerMonth(r)))}
+  r.status='已取消';r.cancelledAt=today();r.nextDate='';r.updatedAt=stamp(r.updatedAt);Sync.queue('recurring',r);save();rerender(1);toast('已標記為已取消 ✂️ 每月慳返 '+fmt0(n(+r.hkd)*rcPerMonth(r)))}
 function editRc(id){
   const r=id?S.recurring.find(x=>x.id===id):{id:uid('rc-'),kind:'訂閱',category:'其他',name:'',cycle:'每月',currency:'HKD',status:'生效中',firstSeen:today()};
   form(id?'修改固定支出':'新增固定支出',[
@@ -1751,7 +1806,7 @@ function editRc(id){
     {k:'merchant',l:'帳單商戶名',opts:shopOpts(),other:1},{k:'lastDate',l:'上次扣數',t:'date'},{k:'nextDate',l:'下次扣數（留空自動計）',t:'date'},{k:'firstSeen',l:'第一次見',t:'date'},
     {k:'status',l:'狀態',opts:RC_ST},{k:'flag',l:'提示（例如 重複？）'},{k:'est',l:'金額係估算',t:'check'},{k:'adult',l:'私人（收埋喺 🔒 分組）',t:'check'},
     {k:'evidence',l:'證據（交易／電郵）',t:'area'},{k:'txIds',l:'連結交易 id（逗號分隔）',t:'area'},{k:'notes',l:'備註',t:'area'}],
-    r,o=>{if(o.status==='已取消'&&!o.cancelledAt)o.cancelledAt=today();upsertLocal('recurring',o,!id)},id?()=>tombstone('recurring',id):null);
+    r,o=>{if(o.status==='已取消'&&!o.cancelledAt)o.cancelledAt=today();if((String(o.status||'').startsWith('已取消')||o.status==='可能已停')&&o.nextDate)o.nextDate='';upsertLocal('recurring',o,!id)},id?()=>tombstone('recurring',id):null);
   const ids=String(r.txIds||'').split(/[,\s]+/).filter(Boolean);
   if(ids.length){const m=new Map(live(S.transactions).map(t=>[t.id,t]));const L=ids.map(i=>m.get(i)).filter(Boolean).sort((a,b)=>(b.date||'').localeCompare(a.date||''));
     const box=document.createElement('div');box.className='sub';box.innerHTML=`🔗 已連結 ${L.length} 筆交易：<br>`+L.slice(0,12).map(t=>`${t.date} ${fmt(t.amount)} · ${esc(t.account)}`).join('<br>')+(L.length>12?`<br>…仲有 ${L.length-12} 筆`:'');
@@ -2043,7 +2098,7 @@ function settings(){
   tabBeforeSettings=tab;
   settingsOpen=true;
   f.innerHTML=`<h3 style="margin:0">設定／備份</h3>
-  <div class="sub">App 程式版本：${APP_VER}（已確定預留／建議預留分開；要 v46+）</div>
+  <div class="sub">App 程式版本：${APP_VER}（已確定預留／建議預留分開；要 v47+）</div>
   <button type="button" class="primary" id="forceRefreshBtn">🔃 強制刷新 App（拎最新版）</button>
   <button type="button" class="primary" id="expBtn">⬇️ 匯出 JSON 備份</button>
   <button type="button" id="impBtn">⬆️ 匯入 JSON</button>
