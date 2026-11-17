@@ -1,5 +1,5 @@
 'use strict';
-const KEY='hhledger.v1', SYNC_KEY='hhledger.sync', SYNCQ_KEY='hhledger.syncq', APP_VER='v45';
+const KEY='hhledger.v1', SYNC_KEY='hhledger.sync', SYNCQ_KEY='hhledger.syncq', APP_VER='v46';
 const TX_TYPES=['支出','收入','轉帳','分期還款'];
 const WISH_ST=['想要','訂咗','收咗','棄單'];
 /* 常用店舖／商戶（宅店舖、記帳對方／商戶、固定支出帳單商戶；「其他」可自由輸入並記住） */
@@ -212,11 +212,13 @@ const hasCashTrack=()=>cashAccts().length>0;
 function salaryNet(){
   const sal=live(S.salary||[]).slice().sort((a,b)=>String(a.date||'').localeCompare(String(b.date||'')));
   const cur=sal[sal.length-1];
-  if(cur&&n(cur.net)>0)return n(cur.net);
-  if(cur&&n(cur.monthly)>0)return n(cur.monthly);
+  const sheetNet=cur&&n(cur.net)>0?n(cur.net):(cur&&n(cur.monthly)>0?n(cur.monthly):0);
+  const sheetDate=cur?String(cur.date||''):'';
   const txs=live(S.transactions).filter(t=>t.type==='收入'&&n(t.amount)>0&&/薪|SALARY|出糧|FITCH/i.test(String(t.desc||'')+String(t.sub||'')+String(t.category||'')))
     .sort((a,b)=>String(b.date||'').localeCompare(String(a.date||'')));
-  return txs[0]?n(txs[0].amount):0;
+  const tx=txs[0], txAmt=tx?n(tx.amount):0, txDate=tx?String(tx.date||''):'';
+  if(txAmt>0&&(!sheetNet||txDate>=sheetDate))return txAmt;
+  return sheetNet||0;
 }
 function nextSalaryDate(from){
   const t=from||today();
@@ -554,50 +556,48 @@ function rerender(keepScroll){
 /* ---------- 15號糧 → 復常（一眼睇晒糧分配） ---------- */
 const SALARY_RESTORE_LS='hhledger.salaryRestore';
 const SALARY_RESTORE={
-  label:'2026-10',
-  asOf:'2026-10-15',
+  label:'2026-11',
+  asOf:'2026-11-17',
   salary:35100,
-  partnerParking:2000, // OnPP 停車應收／月（由今次）
+  salaryNote:'11/13 已入 777（FITCH SALARY1，Ref 202611110022191366）。實入帳，唔再標估計。',
+  partnerParking:2000,
+  partnerPending:true,
+  partnerNote:'Wilson 11 月 $2,000 仍待用戶決定，唔抽走、唔當已收、唔計入剩可用。',
   noteCardInst:'卡分期（Citi ≈$6,281／月 · HSBC ≈$1,827／月）已入卡結單，唔好再用糧重複付。',
-  plans:{
-    A:{id:'A',name:'復常（建議）',hsbcAmt:13778.74,hsbcLabel:'HSBC 結單全數'},
-    B:{id:'B',name:'只守最低',hsbcAmt:8577,hsbcLabel:'HSBC 最低'}
-  },
   items:[
-    {id:'hsbc',pri:'1',name:'HSBC 應繳',note:'到期 11-06 · 儲蓄 → HSBC VISA',kind:'hsbc',checkable:false},
-    {id:'mum',pri:'2',name:'屋企（Mum）',amt:5500,note:'HSBC／Bank · 約月初',kind:'fixed',checkable:true},
-    {id:'ins',pri:'3',name:'保險保誠 ×5',amt:3937,note:'Bank 自動轉賬 · ④約 25 號',kind:'fixed',checkable:true},
-    {id:'cncbi',pri:'4',name:'CNCBI 分期',amt:1900,note:'每月 27 號',kind:'fixed',checkable:false},
-    {id:'citi',pri:'✓',name:'Citi 循環最低',amt:0,note:'循環已清',kind:'info',checkable:false,doneFixed:true},
-    {id:'dbs',pri:'11月',name:'DBS 私人貸',amt:12243,note:'由 11 月起 · 今個月唔計',kind:'skip',checkable:false}
+    {id:'mum',pri:'1',name:'屋企（Mum）',amt:5500,note:'11/02 S INST 已由 777 扣',status:'paid'},
+    {id:'ins',pri:'2',name:'保險保誠 ×5',amt:3938.47,note:'11/06 AUTOPAY 五張已由 777 扣（$506.82＋$827.26＋$876.58＋$1,542.84＋$184.97）',status:'paid'},
+    {id:'dbs',pri:'3',name:'DBS 私人貸',amt:12243,note:'11/09 AUTOPAY 已由 777 扣',status:'paid'},
+    {id:'cncbi',pri:'4',name:'CNCBI 分期',amt:1866.67,note:'每月約 27 號。10/27 已入簿 $1,866.67。11/27 尚未到期，未扣，唔當已付。',status:'due'}
+  ],
+  allocations:[
+    {id:'take',name:'777→833',amt:28000,note:'11/17 已轉（簿內已入；無電郵 Ref，按 17:51 截圖）',status:'paid'},
+    {id:'tax',name:'稅款撥入 833 往來',amt:13780,note:'已撥入，未交稅務局。第一期 2027-01-25 $11,628，第二期 2027-04-23 $2,152。總覽繼續用 Recurring 預留一次，唔另扣。',status:'earmarked'},
+    {id:'util',name:'水電 pot',amt:2000,note:'11/17 已撥入。銀行 One 合計仍 $32,326.76，簿內 One $30,326.76 以免雙計。pot 結餘 $1,898.30。',status:'paid'},
+    {id:'visa',name:'滙豐 Visa 十二月結單',amt:9239.48,note:'11/17 17:46 已過數，Ref ZBH28382256',status:'paid'},
+    {id:'citi',name:'Citi 十二月結單',amt:38382.29,note:'11/17 17:50 已過數，繳費靈 PPS 932219',status:'paid'}
   ]
 };
 function salaryRestoreState(){
-  let st={plan:'A',done:{},partnerOn:true,ym:SALARY_RESTORE.label};
+  let st={done:{},partnerOn:false,ym:SALARY_RESTORE.label};
   try{const j=JSON.parse(localStorage.getItem(SALARY_RESTORE_LS)||'{}');if(j&&typeof j==='object')st=Object.assign(st,j)}catch(_){}
-  if(st.ym!==SALARY_RESTORE.label){st.ym=SALARY_RESTORE.label;st.done={}}
-  if(st.plan!=='A'&&st.plan!=='B')st.plan='A';
-  if(typeof st.partnerOn!=='boolean')st.partnerOn=true;
+  if(st.ym!==SALARY_RESTORE.label){st.ym=SALARY_RESTORE.label;st.done={};st.partnerOn=false}
+  if(typeof st.partnerOn!=='boolean')st.partnerOn=false;
   if(!st.done||typeof st.done!=='object')st.done={};
   return st;
 }
 function salaryRestoreSave(st){try{localStorage.setItem(SALARY_RESTORE_LS,JSON.stringify(st))}catch(_){}}
 function salaryRestoreCalc(st){
-  const R=SALARY_RESTORE, plan=R.plans[st.plan]||R.plans.A;
-  const rows=[];
-  let must=0, skippedDone=0;
-  R.items.forEach(it=>{
-    if(it.kind==='skip'){rows.push({...it,amt:it.amt,active:false,done:false,skip:true});return}
-    if(it.kind==='info'){rows.push({...it,amt:n(it.amt),active:false,done:!!it.doneFixed,skip:false});return}
-    const amt=it.kind==='hsbc'?plan.hsbcAmt:n(it.amt);
-    const done=it.checkable?!!st.done[it.id]:false;
-    const active=!done;
-    if(active)must+=amt; else skippedDone+=amt;
-    rows.push({...it,amt,active,done,skip:false,hsbcLabel:it.kind==='hsbc'?plan.hsbcLabel:null});
+  const R=SALARY_RESTORE;
+  const rows=R.items.map(it=>{
+    const amt=n(it.amt), status=it.status||'due';
+    return {...it,amt,status,paid:status==='paid'||status==='earmarked',skip:false};
   });
-  const partner=st.partnerOn?n(R.partnerParking):0;
-  const left=n(R.salary)-must+partner;
-  return {plan,rows,must,skippedDone,partner,left,salary:n(R.salary)};
+  const allocs=(R.allocations||[]).map(it=>({...it,amt:n(it.amt)}));
+  const paidCash=rows.filter(r=>r.status==='paid').reduce((s,r)=>s+r.amt,0);
+  const dueCash=rows.filter(r=>r.status==='due').reduce((s,r)=>s+r.amt,0);
+  const left=n(R.salary)-paidCash-dueCash;
+  return {rows,allocs,paidCash,must:dueCash,skippedDone:paidCash,partner:0,left,salary:n(R.salary)};
 }
 window.toggleRestoreDone=(id)=>{
   const st=salaryRestoreState();
@@ -624,6 +624,16 @@ const CLEARING_STEPS=[
   {id:'recvOnPP',emoji:'💗',cta:'收咗 OnPP？撳確認',stamp:'收齊',linkRecv:true,noteField:true,notePh:'可選金額／備註'},
   {id:'cardsPaid',emoji:'💳',cta:'卡／PPS 還咗？撳確認',stamp:'還咗'}
 ];
+function clearingLedgerHint(id){
+  const hints={
+    salary777:'簿內：11/13 FITCH $35,100 已入 777。蓋章淨係本機確認，唔會改帳。',
+    deductDone:'簿內：屋企 $5,500、保誠 $3,938.47、DBS $12,243 已扣。CNCBI $1,866.67 約 11/27 未到，未扣。',
+    takeCurrent:'簿內：11/17 777→833 $28,000 已入。',
+    recvOnPP:'簿內：OnPP 電話錢 $22,799 已入。Wilson 11 月 $2,000 仍待決定，唔抽。Accounts 應收仲有 $1,214。',
+    cardsPaid:'簿內：十二月 Visa $9,239.48（17:46，Ref ZBH28382256）同 Citi $38,382.29（17:50，PPS 932219）已過數。'
+  };
+  return hints[id]||'';
+}
 let _clearingSealingId=null;
 function clearingRitualState(){
   let st={ym:SALARY_RESTORE.label,done:{},notes:{}};
@@ -681,6 +691,7 @@ function clearingRitualHtml(){
   const cards=CLEARING_STEPS.map(s=>{
     const on=!!st.done[s.id];
     const sealing=_clearingSealingId===s.id;
+    const hint=clearingLedgerHint(s.id);
     const noteInp=s.noteField?`<input type="text" class="ritual-note" placeholder="${esc(s.notePh||'可選備註')}" value="${esc(st.notes[s.id]||'')}" onchange="setClearingNote('${esc(s.id)}',this.value)" onclick="event.stopPropagation()">`:'';
     const link=s.linkRecv?`<button type="button" class="linkish" onclick="event.stopPropagation();tab='recv';history.replaceState(null,'','#recv');render()">去 OnPP 應收</button>`:'';
     const stampCls=`ritual-rubber${sealing?' sealing':''}`;
@@ -688,6 +699,7 @@ function clearingRitualHtml(){
       <span class="ritual-emoji">${esc(s.emoji)}</span>
       <span class="ritual-body">
         <span class="ritual-cta">${on?'已確認 · 再撳可解除':esc(s.cta)}</span>
+        ${hint?`<small class="note">${esc(hint)}</small>`:''}
         ${noteInp}${link}
       </span>
       <span class="${stampCls}" aria-hidden="true">${esc(s.stamp)}</span>
@@ -701,11 +713,18 @@ function clearingRitualHtml(){
     </div>`:'';
   return `<div class="card ritual-card">
     <h2>清數儀式</h2>
-    <div class="sub tip">每步撳一下蓋章確認 · 再撳可解除</div>
+    <div class="sub tip">每步撳一下蓋章確認 · 再撳可解除。改糧月後本機蓋章會重設；底下「簿內」狀態跟家計簿，唔使再記一次。</div>
     <div class="ritual-progress"><span class="ritual-count">${doneN}／${CLEARING_STEPS.length}</span>${pills}</div>
     <div class="ritual-steps">${cards}</div>
     ${finale}
   </div>`;
+}
+
+function restoreStatusRight(it){
+  if(it.status==='paid')return `<span class="pill ok">已扣 · 已入簿</span>`;
+  if(it.status==='earmarked')return `<span class="pill ok">已撥入</span>`;
+  if(it.status==='due')return `<b class="neg">${fmt(it.amt)}</b>`;
+  return `<b>${fmt(it.amt)}</b>`;
 }
 
 function salaryRestoreTeaserHtml(){
@@ -714,68 +733,64 @@ function salaryRestoreTeaserHtml(){
   return `<div class="card restore-teaser" onclick="tab='restore';history.replaceState(null,'','#restore');render()">
     <h2>💰 15號糧 → 復常 <span class="pill amber">${esc(SALARY_RESTORE.label)}</span></h2>
     <div class="restore-flow">
-      <div><small class="note">糧入</small><b class="accent-num">${fmt0(c.salary)}</b></div>
+      <div><small class="note">糧入（已入簿）</small><b class="accent-num">${fmt0(c.salary)}</b></div>
       <span class="restore-arrow">→</span>
-      <div><small class="note">已分配／仲要付</small><b>${fmt0(c.must)}</b></div>
+      <div><small class="note">777 已扣</small><b>${fmt(c.skippedDone)}</b></div>
       <span class="restore-arrow">→</span>
-      <div><small class="note">剩可用</small><b class="restore-left ${leftCls}">${fmt0(c.left)}</b></div>
+      <div><small class="note">預留 CNCBI 後剩</small><b class="restore-left ${leftCls}">${fmt(c.left)}</b></div>
     </div>
-    <div class="sub" style="margin-top:8px">${c.partner?`含 OnPP 停車 +${fmt0(c.partner)} · `:''}方案 ${esc(c.plan.name)} · 撳入必扣清單 →</div>
+    <div class="sub" style="margin-top:8px">未扣：CNCBI ${fmt(c.must)}（約 11/27）· 十二月結單已過數 · 撳入對帳 →</div>
   </div>`;
 }
+
 function vRestore(){
   const R=SALARY_RESTORE, st=salaryRestoreState(), c=salaryRestoreCalc(st);
   const leftCls=c.left<5000?'neg':(c.left<12000?'amber-hi':'pos');
   const rowHtml=c.rows.map(it=>{
-    if(it.skip) return `<div class="row restore-row skip"><div class="l"><span class="pill">${esc(it.pri)}</span> ${esc(it.name)}<small class="note">${esc(it.note)} · ${fmt0(it.amt)}</small></div><div class="r mute">今個月唔計</div></div>`;
-    if(it.kind==='info') return `<div class="row restore-row"><div class="l"><span class="pill ok">${esc(it.pri)}</span> ${esc(it.name)}<small class="note">${esc(it.note)}</small></div><div class="r pos">${fmt0(it.amt)}</div></div>`;
-    const title=it.hsbcLabel||it.name;
-    const chk=it.checkable?`<label class="restore-chk" onclick="event.stopPropagation()"><input type="checkbox" ${it.done?'checked':''} onchange="toggleRestoreDone('${esc(it.id)}')"> 已扣</label>`:'';
-    const stCls=it.done?'done':'';
-    const right=it.done?`<span class="pill ok">已扣 · 唔重複</span>`:`<b class="${it.kind==='hsbc'?'neg':''}">${fmt0(it.amt)}</b>`;
-    return `<div class="row restore-row ${stCls}"><div class="l"><span class="pill ${it.kind==='hsbc'?'amber':''}">${esc(it.pri)}</span> <b>${esc(title)}</b><small class="note">${esc(it.note)}</small>${chk}</div><div class="r">${right}</div></div>`;
+    const stCls=it.paid?'done':'';
+    const pillCls=it.status==='due'?'amber':'ok';
+    return `<div class="row restore-row ${stCls}"><div class="l"><span class="pill ${pillCls}">${esc(it.pri)}</span> <b>${esc(it.name)}</b><small class="note">${esc(it.note)}</small></div><div class="r">${restoreStatusRight(it)}</div></div>`;
+  }).join('');
+  const allocHtml=c.allocs.map(it=>{
+    const right=it.status==='earmarked'?`<span class="pill ok">已撥入</span>`:`<span class="pill ok">已入簿</span>`;
+    return `<div class="row restore-row done"><div class="l"><b>${esc(it.name)}</b><small class="note">${esc(it.note)} · ${fmt(it.amt)}</small></div><div class="r">${right}</div></div>`;
   }).join('');
   return `
   <div class="actions" style="margin-bottom:8px"><button type="button" onclick="tab='overview';history.replaceState(null,'','#overview');render()">← 總覽</button></div>
   <div class="card restore-hero">
     <h2>一眼睇晒糧分配 · ${esc(R.label)}</h2>
-    <div class="sub">對帳至 ${esc(R.asOf)} · 實際以銀行入帳為準</div>
+    <div class="sub">對帳至 ${esc(R.asOf)} · 實際以銀行入帳為準 · 唔再標估計</div>
     <div class="restore-hero-grid">
-      <div><small class="note">糧入（估計）</small><div class="big accent-num">${fmt0(c.salary)}</div></div>
-      <div><small class="note">仲要付／已分配</small><div class="big">${fmt0(c.must)}</div>
-        ${c.skippedDone?`<div class="sub">已剔唔重複 ${fmt0(c.skippedDone)}</div>`:''}</div>
+      <div><small class="note">糧入（已入 777）</small><div class="big accent-num">${fmt0(c.salary)}</div></div>
+      <div><small class="note">出糧前後已由 777 扣</small><div class="big">${fmt(c.skippedDone)}</div></div>
     </div>
     <div class="restore-left-box">
-      <div class="label">剩可用（小心使）</div>
-      <div class="big big-xxl restore-left ${leftCls}">${fmt0(c.left)}</div>
-      <div class="sub">${c.partner?`已計 OnPP 停車 +${fmt0(c.partner)}`:''}${c.left<12000?' · 數字大＝提醒你慳使':''}</div>
+      <div class="label">呢筆糧預留 CNCBI 後剩</div>
+      <div class="big big-xxl restore-left ${leftCls}">${fmt(c.left)}</div>
+      <div class="sub">仲要由 777 扣：CNCBI ${fmt(c.must)}（約 11/27）。十二月結單、稅、水電 pot、777→833 用現有現金／已入袋，唔從單月糧再扣一次。</div>
     </div>
   </div>
   <div class="card">
-    <h2>方案</h2>
-    <div class="chips">
-      <button type="button" class="${st.plan==='A'?'on':''}" onclick="setRestorePlan('A')">A · 還清結單（建議）</button>
-      <button type="button" class="${st.plan==='B'?'on':''}" onclick="setRestorePlan('B')">B · 只守最低</button>
-    </div>
-    <div class="sub">${st.plan==='A'?'HSBC 用結單全數 '+fmt0(R.plans.A.hsbcAmt)+'（真復常）':'HSBC 只還最低 '+fmt0(R.plans.B.hsbcAmt)+' → 結單仲欠 ≈'+fmt0(R.plans.A.hsbcAmt-R.plans.B.hsbcAmt)+'，息會繼續'}</div>
-  </div>
-  <div class="card">
-    <h2>必扣清單</h2>
-    <div class="sub tip">Mum／保險月初已扣可剔「已扣」——15 號糧唔好再扣一次。卡分期已喺結單，唔重複。</div>
+    <h2>由呢筆糧（777）必扣</h2>
+    <div class="sub tip">Mum／保險／DBS 已入簿，唔好再扣一次。CNCBI 未到，唔當已付。</div>
     ${rowHtml}
     <div class="sub" style="margin-top:8px">${esc(R.noteCardInst)}</div>
   </div>
   <div class="card">
+    <h2>本月復常調配（已做）</h2>
+    <div class="sub tip">用現有現金／已入袋，唔從單月糧重複扣。</div>
+    ${allocHtml}
+  </div>
+  <div class="card">
     <h2>OnPP 停車應收</h2>
-    <div class="row"><div class="l"><b>每月 $2,000</b><small class="note">由今次起 · 作收入／減輕糧壓</small>
-      <label class="restore-chk"><input type="checkbox" ${st.partnerOn?'checked':''} onchange="toggleRestorePartner()"> 計入剩可用</label></div>
-      <div class="r pos">+${fmt0(R.partnerParking)}</div></div>
+    <div class="row"><div class="l"><b>Wilson 11 月 $2,000</b><small class="note">${esc(R.partnerNote)}</small></div>
+      <div class="r mute">待決定</div></div>
   </div>
   ${clearingRitualHtml()}
   <div class="card">
     <h2>「復常」定義</h2>
-    <div class="sub">今個月：卡唔逾期、HSBC 最低（最好結單）準時、屋企同保險唔斷、CNCBI 準時；Citi 循環保持 $0；唔再滾新循環；扣完仲有生活錢去到月底。</div>
-    <div class="sub" style="margin-top:8px"><b>若唔夠由上到下：</b> HSBC 最低 → 保險 → 屋企 → CNCBI → HSBC 結單多還 → 泊車／水電 → 訂閱雜項</div>
+    <div class="sub">15 號出糧後把糧分去應去嘅位（屋企、保險、貸款、還卡、稅款、水電 pot）。唔係一間公司或收款人。</div>
+    <div class="sub" style="margin-top:8px"><b>仲差邊啲先算本月復常齊：</b>CNCBI 分期 $1,866.67（約 11/27）未扣。Wilson 11 月 $2,000 仍待決定，唔計入今次必扣。$701 未解釋入帳維持標記，唔係復常項目。</div>
   </div>`;
 }
 
@@ -2028,7 +2043,7 @@ function settings(){
   tabBeforeSettings=tab;
   settingsOpen=true;
   f.innerHTML=`<h3 style="margin:0">設定／備份</h3>
-  <div class="sub">App 程式版本：${APP_VER}（已確定預留／建議預留分開；要 v45+）</div>
+  <div class="sub">App 程式版本：${APP_VER}（已確定預留／建議預留分開；要 v46+）</div>
   <button type="button" class="primary" id="forceRefreshBtn">🔃 強制刷新 App（拎最新版）</button>
   <button type="button" class="primary" id="expBtn">⬇️ 匯出 JSON 備份</button>
   <button type="button" id="impBtn">⬆️ 匯入 JSON</button>
