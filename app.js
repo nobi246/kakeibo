@@ -1,5 +1,5 @@
 'use strict';
-const KEY='hhledger.v1', SYNC_KEY='hhledger.sync', SYNCQ_KEY='hhledger.syncq', APP_VER='v44';
+const KEY='hhledger.v1', SYNC_KEY='hhledger.sync', SYNCQ_KEY='hhledger.syncq', APP_VER='v45';
 const TX_TYPES=['支出','收入','轉帳','分期還款'];
 const WISH_ST=['想要','訂咗','收咗','棄單'];
 /* 常用店舖／商戶（宅店舖、記帳對方／商戶、固定支出帳單商戶；「其他」可自由輸入並記住） */
@@ -356,15 +356,30 @@ function spendableHtml(asOf,netCard,instSum){
   const stmtOwn=x.stmts.reduce((s,r)=>s+n(r.ownShare!=null?r.ownShare:r.amt),0);
   const stmtOwnCiti=x.stmts.filter(r=>String(r.id||'')==='citi'||/citi|6578/i.test(String(r.id||'')+' '+String(r.name||''))).reduce((s,r)=>s+n(r.ownShare!=null?r.ownShare:r.amt),0);
   const stmtOwnVisa=x.stmts.filter(r=>{const k=String(r.id||'')+' '+String(r.name||''); if(String(r.id||'')==='citi'||/citi|6578/i.test(k))return false; return String(r.id||'')==='hsbc'||/hsbc|滙豐|0992/i.test(k);}).reduce((s,r)=>s+n(r.ownShare!=null?r.ownShare:r.amt),0);
+  const paidStmts=cards().filter(a=>n(a.stmtBal)>0&&n(a.paidAfterStmt)>=n(a.stmtBal));
+  const ownBits=[];
+  if(stmtOwnCiti>0) ownBits.push(`Citi ${fmt0(stmtOwnCiti)}`);
+  if(stmtOwnVisa>0) ownBits.push(`Visa ${fmt0(stmtOwnVisa)}`);
+  const ownDetail=ownBits.length?`（${ownBits.join(' ＋ ')}）`:'';
+  const stmtLead=x.stmts.length
+    ? (stmtPhone>0
+      ? '稅＋出糧前 '+esc(x.until)+' 必付＋十二月結單面額（自己份同已入袋電話錢）；結單後新帳留待下期；還款尚未過數'
+      : '稅＋出糧前 '+esc(x.until)+' 必付＋十二月結單自己份；結單後新帳留待下期；還款尚未過數')
+    : (paidStmts.length
+      ? '稅＋出糧前 '+esc(x.until)+' 必付；十二月結單已過數；結單後新帳留待下期'
+      : '稅＋出糧前 '+esc(x.until)+' 必付；結單後新帳留待下期');
+  const paidNote=paidStmts.length?`<div class="sub">${paidStmts.map(a=>`${esc(a.name)} ${fmt0(a.stmtBal)} 已過數`).join('；')}</div>`:'';
+  const unpaidHead=x.stmts.length?`<div class="sub" style="margin-top:6px">${stmtPhone>0?'十二月結單面額':'十二月結單自己份'}（還款意向，尚未過數）</div>${x.stmts.map(spendableLine).join('')}${stmtPhone>0?`<div class="sub">其中：自己份 ${fmt0(stmtOwn)}${ownDetail}；已入袋電話錢 ${fmt0(stmtPhone)}</div>`:''}`:'';
   return `
   <div class="card hero-home">
     <h2>而家真正可用</h2>
     <div class="big big-xl ${availCls}">${fmt0(x.avail)}</div>
-    <div class="sub">${asOf?'截至 '+esc(asOf)+' · ':''}帳面現金 ${fmt0(x.cash)} − 已確定預留 ${fmt0(x.confirmedAmt)}（稅＋出糧前 ${esc(x.until)} 必付＋${stmtPhone>0?'十二月結單面額（自己份同已入袋電話錢）':'十二月結單自己份'}；結單後新帳留待下期；還款尚未過數）</div>
+    <div class="sub">${asOf?'截至 '+esc(asOf)+' · ':''}帳面現金 ${fmt0(x.cash)} − 已確定預留 ${fmt0(x.confirmedAmt)}（${stmtLead}）</div>
     <details class="spend-break" style="margin-top:8px"><summary class="sub"><b>已確定預留 ${fmt0(x.confirmedAmt)}</b></summary>
       ${x.tax.map(spendableLine).join('')}
       ${x.upcoming.length?`<div class="sub" style="margin-top:6px">出糧前必付 ${fmt0(upSum)}</div>${x.upcoming.map(spendableLine).join('')}`:''}
-      ${x.stmts.length?`<div class="sub" style="margin-top:6px">${stmtPhone>0?'十二月結單面額':'十二月結單自己份'}（還款意向，尚未過數）</div>${x.stmts.map(spendableLine).join('')}${stmtPhone>0?`<div class="sub">其中：自己份 ${fmt0(stmtOwn)}（Citi ${fmt0(stmtOwnCiti)} ＋ Visa ${fmt0(stmtOwnVisa)}）；已入袋電話錢 ${fmt0(stmtPhone)}</div>`:''}`:''}
+      ${unpaidHead}
+      ${paidNote}
     </details>
     <div class="grid2" style="margin-top:10px">
       <div><small class="note">卡數現況（Live）</small><div class="sub" style="margin-top:4px">循環 <b class="${fbNet.cls}">${fbNet.txt}</b><br>分期合計 ${fmt(instSum)}</div></div>
@@ -2013,7 +2028,7 @@ function settings(){
   tabBeforeSettings=tab;
   settingsOpen=true;
   f.innerHTML=`<h3 style="margin:0">設定／備份</h3>
-  <div class="sub">App 程式版本：${APP_VER}（已確定預留／建議預留分開；要 v44+）</div>
+  <div class="sub">App 程式版本：${APP_VER}（已確定預留／建議預留分開；要 v45+）</div>
   <button type="button" class="primary" id="forceRefreshBtn">🔃 強制刷新 App（拎最新版）</button>
   <button type="button" class="primary" id="expBtn">⬇️ 匯出 JSON 備份</button>
   <button type="button" id="impBtn">⬆️ 匯入 JSON</button>
